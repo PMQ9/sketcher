@@ -23,9 +23,9 @@ tests + 21 pixel assertions all green**. The single biggest open question — ca
 SwiftUI `Canvas` hold frame rate — has been **answered and resolved** (§7): the
 render cache is mandatory and it works. Nothing is blocked.
 
-**M1 + M2 + M3 are committed** on `main` (17 subsystem commits atop the upstream
-"Initial commit"). **M4 is uncommitted in the working tree** as of this update —
-commit when the user asks (don't commit unprompted).
+**M1–M4 are all committed** on `main` (23 subsystem commits atop the upstream
+"Initial commit"); the working tree is clean. Next work is **M5 (multiline text)**.
+Commit when the user asks (don't commit unprompted).
 
 ### Resume in 60 seconds
 
