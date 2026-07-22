@@ -16,14 +16,15 @@ Swift 6 + SwiftUI + CoreGraphics/CoreImage, **zero third-party deps, no Xcode
 project**. Built in numbered milestones (M1–M8 = v1); each milestone stays runnable.
 
 **Where it stands (2026-07-22):** M1 done, **M2 ~90% done**, **M3 core complete**
-(shapes + shape library, multi-select, resize/rotate handles, object clipboard,
-arrange). The app builds warning-clean, launches to a blank canvas you can draw
-on, and has **75 unit tests + 21 pixel assertions all green**. The single biggest
-open question — can SwiftUI `Canvas` hold frame rate — has been **answered and
-resolved** (§7): the render cache is mandatory and it works. Nothing is blocked.
+(shapes, multi-select, handles, clipboard, arrange), **M4 core complete** (color
+system, eyedropper, blur/pixelate redaction, style inspector). The app builds
+warning-clean, launches to a blank canvas you can draw on, and has **89 unit
+tests + 21 pixel assertions all green**. The single biggest open question — can
+SwiftUI `Canvas` hold frame rate — has been **answered and resolved** (§7): the
+render cache is mandatory and it works. Nothing is blocked.
 
-**M1 + M2 are committed** on `main` (10 subsystem commits atop the upstream
-"Initial commit"). **M3 is uncommitted in the working tree** as of this update —
+**M1 + M2 + M3 are committed** on `main` (17 subsystem commits atop the upstream
+"Initial commit"). **M4 is uncommitted in the working tree** as of this update —
 commit when the user asks (don't commit unprompted).
 
 ### Resume in 60 seconds
@@ -39,23 +40,25 @@ make run       # launches dist/Sketcher.app — draw a stroke to sanity-check
 Read order for a new agent: this section → §8 (file map) → `CLAUDE.md` (the 15
 invariants) → §2 (decisions) → §3/§4 (traps + bugs) before editing.
 
-### What to do next (M4, plus small M2/M3 tails)
+### What to do next (M5, plus small tails)
 
-**M3 core is done** (see the M3 subsection in §1). Next milestone is **M4 —
-color system, style inspector, and BLUR redaction** (the first explicitly-requested
-"add blur" feature). Blur ports near-verbatim from screenshot-editor's
-`BlurPatchCache`; redaction is destructive at commit (D11) and is asserted by
-both a pixel test and a file-content test.
+**M3 and M4 core are done** (see their subsections in §1). Next milestone is
+**M5 — multiline text**: `T` places an auto-width box, `NSFontPanel`, inline
+family/size, `Cmd+B/I/U`, alignment, the legibility plate, and rotated-box
+editing. Budget it like the selection subsystem — CoreText-vs-TextKit2 metrics
+divergence, IME, dictation, and font fallback each eat time. `TextMetrics.swift`
+(render + 3-mode sizing) already exists; M5 adds the editing overlay.
 
 **Small tails to mop up when convenient:**
 - **M2 drag-out**: `PasteboardWriter.temporaryPNG` exists; needs an `NSItemProvider`
-  drag source on a toolbar handle. No new model work.
+  drag source on a toolbar handle.
 - **M2 export options** (1×/2×/3×, page vs selection, transparency): today `Export…`
-  writes the page at 1×. `ExportService.renderRegion` and `renderObjects` exist.
-- **M3 deferrals** (each noted in §2/§6, none blocking): the object-eraser *tool*
-  and group *rotate* wait for M6's eraser-mode machine and a general group affine;
-  non-polygon library shapes (callout/heart) need new `ObjectKind`s; align/distribute
-  are menu-only (no arrow-key equivalents yet).
+  writes the page at 1×. `ExportService.renderRegion` / `renderObjects` exist.
+- **M4 tails** (none blocking): inspector has no shadow/arrowhead/blend controls
+  yet; the color UI has swatches + 8 recents but no shades-popover or hex field;
+  non-destructive `.filter` objects are M9 (M4's blur is the destructive redaction).
+- **M3 deferrals**: object-eraser *tool* and group *rotate* (M6 / general affine);
+  non-polygon library shapes; align/distribute keyboard shortcuts.
 
 ### Gotchas that will waste your time if you don't know them
 
@@ -83,7 +86,7 @@ Legend: ☐ not started · ◐ in progress · ☑ done & verified
 | M1 | Runnable app: window, blank light/dark canvas, one stroke, undo | ☑ | `make run` + `make test` (41 passing) |
 | M2 | Viewport, render cache, pixel harness, export, codec, crash recovery | ◐ | `make verify` (21 checks), `--perf`, 54 tests |
 | M3 | Shapes, multi-select, handles, clipboard, arrange | ◐ | 75 tests; core done, deferrals below |
-| M4 | Color system, style inspector, blur redaction | ☐ | |
+| M4 | Color system, style inspector, blur redaction | ◐ | 89 tests; core done, tails below |
 | M5 | Multiline text | ☐ | |
 | M6 | Raster layers, brush engine, erasers, layers panel, raster undo | ☐ | |
 | M7 | Regions: select, move, copy, paste, bucket, wand | ☐ | |
@@ -175,6 +178,36 @@ Deferred within M3 (none blocking, all recorded in §6):
   are awkward and the plan's `Ctrl+Cmd+Arrows` collide with macOS Spaces on some
   setups).
 
+### M4 — core complete (2026-07-22)
+
+Delivered and tested (14 new tests: `ColorRedactionTests.swift`, `+StyleInspectorTests`):
+
+- [x] **Color system** — primary/secondary slots, swap (`X`), reset to black/white
+  (`D`), 8 de-duplicated recents, a preset+recents swatch strip in the toolbar.
+  Clicking a swatch recolors the selection (one undo entry) or arms the next object.
+- [x] **Eyedropper** — `I` samples the composited canvas (1×1 region through the
+  real pipeline, read UN-premultiplied per invariant 10); `Shift+I` is the
+  screen-wide `NSColorSampler` (no TCC prompt, D10). New **Color** menu.
+- [x] **Blur / pixelate redaction** — `J` / `Shift+J`. Drag out a region; on commit
+  it renders the composite, blurs/pixelates via one shared `CIContext`, DELETES
+  every vector object fully inside, clips partially-covered ones (`addErasedRect`),
+  and drops the opaque patch on top — one undo entry. **Destructive (D11)**: asserted
+  by a pixel test (near-black count collapses) AND a file-content test (no
+  `rectangle` geometry left in the saved JSON). Survives undo→redo via the new
+  history-surface-retention fix (D25).
+- [x] **Style inspector** — a trailing panel (toggle in the status bar) editing
+  fill on/off + color, stroke width, dash, corner radius (rects), and opacity.
+  With a selection it edits the objects; with none it edits the armed-tool defaults.
+  Slider drags coalesce into ONE undo entry via `beginStyleEdit`/`endStyleEdit`
+  (History's interactive bracket).
+
+Tails (none blocking, in §0's "what to do next"):
+
+- [ ] Inspector: no shadow / arrowhead / blend-mode controls yet.
+- [ ] Color UI: swatches + recents, but no shades-popover or hex field.
+- [ ] Non-destructive `.filter` objects (aesthetic blur that stays editable) are M9;
+  M4's blur is the destructive privacy redaction only.
+
 ---
 
 ## 2. Technical design decisions
@@ -208,6 +241,10 @@ this list rather than quietly reversing an entry.
 | D22 | **Object clipboard = private UTI (lossless `ObjectSpec` JSON) + PNG + TIFF.** Paste reads object JSON ONLY | The private type round-trips geometry, style, rotation, groups, and unknown types between Sketcher windows/launches; PNG+TIFF let other apps consume a copy. Pasting an EXTERNAL image as a raster object waits for M6/M7, where the `SurfaceStore` lifecycle across undo/redo is built — pruning a just-registered surface on undo would lose its pixels on redo. |
 | D23 | **Groups are a flat id list, atomic for selection.** Clicking one member selects the whole outermost group; duplicate/paste remaps group ids | Excalidraw's model (D-none new: `groupIDs` existed from M1). No recursive scene graph, so `Scene` stays a flat value type. Remapping on copy stops a duplicated group from silently rejoining its original. Double-click-to-enter-group is deferred (M10-ish). |
 | D24 | **Shape library maps entirely onto `polygon(sides:starInnerRatio:)`** | ~20 real entries (regular polygons + stars) with ZERO new render/hit-test/codec/resize paths — the whole library is free because the polygon kind already does N-gons and stars. Non-polygon shapes are the expensive ones and are deferred, not faked. |
+| D25 | **Pruning keeps surfaces referenced by any HISTORY entry, not just the live scene** (`History.referencedSurfaceIDs` ∪ `scene.referencedSurfaceIDs`) | Redaction (and future image paste) registers a surface the scene references. After undo the scene no longer references it, but the redo stack does — so a plain `scene`-only keep-set would collect it and redo would render an empty patch. This is the lightweight M4 substitute for M6's full `RasterPatch` lifecycle; it is enough because `.scene` history entries carry the whole `Scene` (which holds the `SurfaceID`s). |
+| D26 | **Redaction is a destructive `.image` object on the active vector layer**, not a new raster layer | The plan says "raster layer at the top", but raster layers are M6. An `.image` object renders through the identical path, so redaction ships in M4 with no M6 dependency. Covered objects are DELETED (secret gone from the file); partially-covered ones get the region appended to `erasedGeometry` in their LOCAL frame. Blur radius / pixelate block scale with region size. |
+| D27 | **Eyedropper (`I`) arms the color; it does NOT recolor the selection.** Swatch clicks DO | Picking a color up and painting a color down are different intents — Paint's eyedropper never recolors what is selected. Discrete swatch/inspector actions apply to the selection (one undo entry each); the continuous main color well only arms, to avoid undo spam during a drag. |
+| D28 | **The inspector edits the selection when there is one, else the armed-tool defaults**, and slider drags coalesce via History's interactive bracket | One panel answers both "how will the next shape look" and "restyle these". `beginStyleEdit`/`endStyleEdit` wrap a slider drag (SwiftUI `onEditingChanged`) so 40 value changes become one undo entry — the same coalescing `beginInteractive`/`endInteractive` was built for. |
 
 ### Rejected, with reasons
 
@@ -393,6 +430,9 @@ layer knows about points or zoom (invariant 1).
 | `ObjectPaths.swift` | Pure `CGPath` construction shared by render + hit test (roundedRect, polygon/star, quad) and `ArrowGeometry` (shaft pullback + head shapes). |
 | `StrokeGeometry.swift` | Midpoint-quadratic smoothing + one-op polyline stroke (single point → filled ellipse). **M6 replaces the outline with a perfect-freehand port.** |
 | `TextMetrics.swift` | CoreText measure/draw, 3-mode sizing. **M5 adds the editing overlay.** |
+| `CIContextProvider.swift` | **(M4)** One shared `CIContext` (linear working space) for every filter — never one per application. |
+| `Redaction.swift` | **(M4)** Renders a region, blurs/pixelates it (halo-safe clamp+crop, anchored pixelate center), returns the opaque patch. |
+| `PixelSampling.swift` | **(M4)** `CGImage.firstPixelUnpremultiplied` — the eyedropper's readback (invariant 10). |
 
 ### ViewModel — `@MainActor` (`Sources/Sketcher/ViewModel/`)
 | File | Purpose |
@@ -411,9 +451,10 @@ layer knows about points or zoom (invariant 1).
 ### Views — SwiftUI (`Sources/Sketcher/Views/`)
 | File | Purpose |
 | --- | --- |
-| `CanvasView.swift` | The drawing surface: workspace backdrop, artboard chrome (hairline+shadow, checkerboard), the cached-vs-live draw split, selection chrome. Input overlay on top. |
-| `ToolbarView.swift` | `ViewThatFits` 3-tier tool palette, color well, size slider, background picker, undo/redo, zoom. Color⇄RGBAColor bridging lives here. |
-| `EditorRootView.swift` | Toolbar / canvas / status-bar layout + the contained/infinite toggle. |
+| `CanvasView.swift` | The drawing surface: workspace backdrop, artboard chrome (hairline+shadow, checkerboard), the cached-vs-live draw split, selection chrome + handles, redaction-region preview. Input overlay on top. |
+| `ToolbarView.swift` | `ViewThatFits` 3-tier tool palette, shape picker, color wells + swap + swatch strip, size slider, background picker, undo/redo, zoom. Color⇄RGBAColor bridging lives here. |
+| `InspectorView.swift` | **(M4)** Trailing style panel: fill, stroke width, dash, corner radius, opacity. Edits the selection or the tool defaults; sliders coalesce to one undo entry. |
+| `EditorRootView.swift` | Toolbar / canvas / inspector / status-bar layout + the contained/infinite and inspector toggles. |
 
 ### App shell — AppKit, `@MainActor` (`Sources/Sketcher/App/`, `Document/`, `Windows/`, `Commands/`, `Pasteboard/`, `Export/`)
 | File | Purpose |
@@ -425,6 +466,7 @@ layer knows about points or zoom (invariant 1).
 | `Document/SketchDocument.swift` | `@objc(SketchDocument)` NSDocument (T17). read/write via `SceneCodec`, edited-dot wiring, `isRestorable = false`. |
 | `Windows/EditorWindowController.swift` | Hosts the SwiftUI view; `sizingOptions = [.minSize]`; the undo selectors. |
 | `Commands/ExportCommands.swift` | Copy-canvas, `Export…` via NSSavePanel, `dragOutURL` (not yet wired to a drag source). |
+| `Commands/ColorCommands.swift` | **(M4)** Screen eyedropper via `NSColorSampler` — kept out of the view model so it stays AppKit-free. |
 | `Pasteboard/PasteboardWriter.swift` | Writes PNG **and** TIFF, point-sized for Retina; temp-PNG for drag-out. |
 | `Pasteboard/ObjectClipboard.swift` | **(M3)** Object cut/copy/paste via a private UTI (lossless `ObjectSpec` JSON) + PNG/TIFF for interop. Read is object-JSON only (external-image paste is M6/M7 — see D22). |
 | `Export/ImageExporter.swift` | `CGImageDestination` wrapper (PNG/JPEG/TIFF/HEIC) + DPI stamping + decode. |
@@ -444,7 +486,7 @@ layer knows about points or zoom (invariant 1).
 | `scripts/bundle.sh` | Hand-assembles `dist/Sketcher.app`, ad-hoc signs, `plutil -lint`. |
 | `scripts/Info.plist` | Bundle id, document type. Comment marks the M8 flip to `LSTypeIsPackage`. |
 | `scripts/verify-render.{sh,swift}` + `make-fixture.swift` | The pixel-fidelity harness (21 assertions) + its fixtures. |
-| `Tests/SketcherTests/` | `GeometryTests`, `HistoryTests` (+ `EditorViewModelTests`), `CodecTests`, `RenderCacheTests` (+ `ExportTests`), `SelectionArrangeTests` (M3: frame geometry, drift-free resize/rotate, group scale, z-order/align/distribute, group + clipboard). 75 tests. |
+| `Tests/SketcherTests/` | `GeometryTests`, `HistoryTests` (+ `EditorViewModelTests`), `CodecTests`, `RenderCacheTests` (+ `ExportTests`), `SelectionArrangeTests` (M3), `ColorRedactionTests` (M4: destructive redaction pixel+file tests, undo/redo surface lifecycle, eyedropper, color slots, style inspector). **89 tests.** |
 
 ### Not yet created (planned, per milestone)
 `Model/Brush/*` + `Raster/*` (M6) · `Model/Shapes/*` + `Grouping`/`HitTest`/`Handles`
