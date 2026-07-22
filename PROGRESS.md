@@ -15,15 +15,16 @@ tools + Excalidraw-class vector editing) on a blank light/dark/transparent canva
 Swift 6 + SwiftUI + CoreGraphics/CoreImage, **zero third-party deps, no Xcode
 project**. Built in numbered milestones (M1–M8 = v1); each milestone stays runnable.
 
-**Where it stands (2026-07-22):** M1 done, **M2 ~90% done**. The app builds
-warning-clean, launches to a blank canvas you can draw on, and has **54 unit
-tests + 21 pixel assertions all green**. The single biggest open question — can
-SwiftUI `Canvas` hold frame rate — has been **answered and resolved** (§7): the
-render cache is mandatory and it works. Nothing is blocked.
+**Where it stands (2026-07-22):** M1 done, **M2 ~90% done**, **M3 core complete**
+(shapes + shape library, multi-select, resize/rotate handles, object clipboard,
+arrange). The app builds warning-clean, launches to a blank canvas you can draw
+on, and has **75 unit tests + 21 pixel assertions all green**. The single biggest
+open question — can SwiftUI `Canvas` hold frame rate — has been **answered and
+resolved** (§7): the render cache is mandatory and it works. Nothing is blocked.
 
-**Nothing is committed.** `git log` shows only the upstream "Initial commit"; the
-entire app is uncommitted in the working tree. First action on resuming should
-probably be a commit (the user controls when — don't commit unprompted).
+**M1 + M2 are committed** on `main` (10 subsystem commits atop the upstream
+"Initial commit"). **M3 is uncommitted in the working tree** as of this update —
+commit when the user asks (don't commit unprompted).
 
 ### Resume in 60 seconds
 
@@ -38,21 +39,23 @@ make run       # launches dist/Sketcher.app — draw a stroke to sanity-check
 Read order for a new agent: this section → §8 (file map) → `CLAUDE.md` (the 15
 invariants) → §2 (decisions) → §3/§4 (traps + bugs) before editing.
 
-### What to do next (M2 close-out, then M3)
+### What to do next (M4, plus small M2/M3 tails)
 
-**Finish M2** (small — see the "Still open for M2" checklist in §1):
-- Wire **drag-out**: `ExportCommands.dragOutURL` already renders the PNG; it needs
-  an `NSItemProvider` drag source on a toolbar handle. No new model work.
-- Export **options** (1×/2×/3×, page vs selection, transparency): today `Export…`
-  writes the page at 1×. `ExportService.renderRegion` already exists for selection.
+**M3 core is done** (see the M3 subsection in §1). Next milestone is **M4 —
+color system, style inspector, and BLUR redaction** (the first explicitly-requested
+"add blur" feature). Blur ports near-verbatim from screenshot-editor's
+`BlurPatchCache`; redaction is destructive at commit (D11) and is asserted by
+both a pixel test and a file-content test.
 
-**Then M3 — shapes, multi-select, handles, clipboard, arrange.** Much is already
-scaffolded (see §1 "pulled forward"): `Selection` (multi-select `Set<UUID>`),
-`Handle` geometry, `DrawObject.resized(handle:to:)`, and marquee-by-intersection
-all exist. M3 is mostly: draw the resize/rotate handles as chrome, wire pointer
-hits on them into `Interaction.resizing`/`.rotating`, add object `⌘C`/`⌘V` via a
-private UTI, and the arrange commands (group, z-order, align, nudge). The plan of
-record has the full M3 spec.
+**Small tails to mop up when convenient:**
+- **M2 drag-out**: `PasteboardWriter.temporaryPNG` exists; needs an `NSItemProvider`
+  drag source on a toolbar handle. No new model work.
+- **M2 export options** (1×/2×/3×, page vs selection, transparency): today `Export…`
+  writes the page at 1×. `ExportService.renderRegion` and `renderObjects` exist.
+- **M3 deferrals** (each noted in §2/§6, none blocking): the object-eraser *tool*
+  and group *rotate* wait for M6's eraser-mode machine and a general group affine;
+  non-polygon library shapes (callout/heart) need new `ObjectKind`s; align/distribute
+  are menu-only (no arrow-key equivalents yet).
 
 ### Gotchas that will waste your time if you don't know them
 
@@ -79,7 +82,7 @@ Legend: ☐ not started · ◐ in progress · ☑ done & verified
 | --- | --- | --- | --- |
 | M1 | Runnable app: window, blank light/dark canvas, one stroke, undo | ☑ | `make run` + `make test` (41 passing) |
 | M2 | Viewport, render cache, pixel harness, export, codec, crash recovery | ◐ | `make verify` (21 checks), `--perf`, 54 tests |
-| M3 | Shapes, multi-select, handles, clipboard, arrange | ☐ | |
+| M3 | Shapes, multi-select, handles, clipboard, arrange | ◐ | 75 tests; core done, deferrals below |
 | M4 | Color system, style inspector, blur redaction | ☐ | |
 | M5 | Multiline text | ☐ | |
 | M6 | Raster layers, brush engine, erasers, layers panel, raster undo | ☐ | |
@@ -132,6 +135,46 @@ Still open for M2:
 - [ ] Export options (1×/2×/3×, page vs selection, transparency toggle) — currently exports the page at 1×
 - [ ] `CheckerboardView` / `ZoomControl` as separate views — both are currently inline in `CanvasView` / `ToolbarView`, which is fine but diverges from the planned file list
 
+### M3 — core complete (2026-07-22)
+
+Delivered and tested (21 new tests across `SelectionArrangeTests.swift`):
+
+- [x] **Interactive resize handles.** A single shape shows an 8-handle box +
+  rotate handle (`SelectionFrame`, `Model/SelectionFrame.swift`); rotated shapes
+  keep the opposite WORLD corner pinned via the existing `resized(handle:to:)`.
+  Handles are chrome-only, drawn in `CanvasView.drawFrame`, and hit-tested before
+  object hits so an overlapping corner stays grabbable.
+- [x] **Rotate handle** — a stalked circle above the top edge; Shift snaps to 15°.
+- [x] **Group scale.** A multi-selection (or a single freehand stroke, which has
+  no per-handle resize) scales as a group around the fixed opposite corner via
+  `DrawObject.scaled(sx:sy:around:)`. **Group rotate is deferred** (needs a general
+  per-child affine; see §6).
+- [x] **Multi-select refinements** — Cmd-click select-behind (cycles the stack),
+  Option-drag duplicate, group-aware click/marquee (clicking one group member
+  selects the whole group).
+- [x] **Object clipboard** — `⌘X`/`⌘C`/`⌘V`/`⇧⌘V`/`⌘D`. Copy writes a private UTI
+  (`com.phamqm.sketcher.objects`, lossless `ObjectSpec` JSON — even unknown object
+  types survive) **plus** PNG + TIFF for pasting into Mail/Preview.
+  `⌘C` is context-sensitive: selection → objects, else the whole canvas.
+- [x] **Arrange** — z-order (forward/backward/front/back within a layer),
+  group/ungroup, align (6 ways), distribute (H/V, centers), lock/hide toggles.
+  New **Arrange** menu. All route through the `Command` enum (invariant 13).
+- [x] **Shape library** — a 20-entry data table (`Model/Shapes/ShapeLibrary.swift`)
+  of regular polygons and stars, all mapping onto the existing
+  `polygon(sides:starInnerRatio:)` kind, with a toolbar picker. **Non-polygon
+  shapes (callout, heart, cloud) are deferred** — each needs a new `ObjectKind`
+  threaded through render/hit-test/codec/resize.
+
+Deferred within M3 (none blocking, all recorded in §6):
+
+- [ ] Object-eraser *tool* → M6 (rides on the eraser-mode state machine). Object
+  removal is already covered by Delete/Cut.
+- [ ] Group *rotate* → needs a general group affine.
+- [ ] Non-polygon library shapes → need new object kinds.
+- [ ] Align/distribute keyboard shortcuts (menu-only for now; arrow-key equivalents
+  are awkward and the plan's `Ctrl+Cmd+Arrows` collide with macOS Spaces on some
+  setups).
+
 ---
 
 ## 2. Technical design decisions
@@ -159,6 +202,12 @@ this list rather than quietly reversing an entry.
 | D16 | `.sketcher` is a flat JSON file until M8, not a package | M1–M7 create no raster surfaces, so there is nothing to put in a package yet. `Info.plist` carries a comment marking the M8 flip to `LSTypeIsPackage`. |
 | D17 | **Geometry in the document format is named and flat** (`{"x":20,"y":20,"width":100,"height":60}`), via `Persistence/GeometrySpec.swift` | CoreGraphics' own `Codable` encodes POSITIONALLY — `CGRect` as `[[x,y],[w,h]]`. That is opaque in a saved file and depends on a Foundation implementation detail that is not contractual. See B7. |
 | D18 | **No hand-rolled crash recovery.** Rely on AppKit's `autosavesInPlace` | **Corrects the plan.** The plan asserted "autosavesInPlace only covers documents with a file URL, so untitled crash recovery is its own path". That is false on macOS 26: untitled documents ARE autosaved (to `~/Library/Autosave Information`) and reopened on the next launch, surviving `kill -9`. `ScratchAutosave` reimplemented a platform feature and the two fought. See B8. |
+| D19 | **`SelectionFrame` is the single source of handle geometry**, chrome-only, rebuilt each access from the live scene | Handles must track a shape as it resizes/rotates. Deriving them on demand (never storing) means they can never go stale, and keeps invariant 4 (`Scene` is content only) intact. Rotate-handle offset is a canvas distance derived from `transform` so it stays constant on screen. |
+| D20 | **Single-object resize uses `resized(handle:to:)`; multi/stroke uses `scaled(sx:sy:around:)`** | The per-shape resize keeps a rotated shape's opposite WORLD corner pinned — that math does not generalize to a heterogeneous group. A group instead scales every member's geometry uniformly around the fixed corner. Both recompute from the pre-gesture originals every frame (no float drift), the same discipline as `Interaction.resizing`. |
+| D21 | **Group scale is geometry-only: shape stroke weight is NOT scaled**, but a freehand stroke's brush width and text's font size ARE | Figma's default — a resized rectangle keeps its border weight, so scaling a group does not balloon every outline. A freehand mark and text are expected to scale wholesale, so those scale their width/size. Recorded because it is a deliberate asymmetry someone will otherwise "fix". |
+| D22 | **Object clipboard = private UTI (lossless `ObjectSpec` JSON) + PNG + TIFF.** Paste reads object JSON ONLY | The private type round-trips geometry, style, rotation, groups, and unknown types between Sketcher windows/launches; PNG+TIFF let other apps consume a copy. Pasting an EXTERNAL image as a raster object waits for M6/M7, where the `SurfaceStore` lifecycle across undo/redo is built — pruning a just-registered surface on undo would lose its pixels on redo. |
+| D23 | **Groups are a flat id list, atomic for selection.** Clicking one member selects the whole outermost group; duplicate/paste remaps group ids | Excalidraw's model (D-none new: `groupIDs` existed from M1). No recursive scene graph, so `Scene` stays a flat value type. Remapping on copy stops a duplicated group from silently rejoining its original. Double-click-to-enter-group is deferred (M10-ish). |
+| D24 | **Shape library maps entirely onto `polygon(sides:starInnerRatio:)`** | ~20 real entries (regular polygons + stars) with ZERO new render/hit-test/codec/resize paths — the whole library is free because the polygon kind already does N-gons and stars. Non-polygon shapes are the expensive ones and are deferred, not faked. |
 
 ### Rejected, with reasons
 
@@ -323,11 +372,14 @@ layer knows about points or zoom (invariant 1).
 | `Scene.swift` | `Scene` (the whole undoable document), `CanvasSpec`, `CanvasMode`, `CanvasBackground` (with `defaultInk`), `PixelSize`, `Guide`. The one type snapshotted for undo. |
 | `Layer.swift` | `Layer`, `LayerContent` (`.vector([DrawObject])` / `.raster(SurfaceID)`), `SurfaceID`. |
 | `DrawObject.swift` | `DrawObject`, `ObjectKind` (the full tagged union), and every payload (`StrokePayload`/`StrokeSample`, `ArrowPayload`, `TextPayload`, `RasterPayload`, `FilterPayload`, `PathGeometry`). Hand-written `Codable` where the format needs to stay clean. |
-| `DrawObject+Geometry.swift` | `bounds`/`renderBounds`, `hitTest` (border-band + inverse-rotation), `translate`, `resized(handle:to:)` (anchors opposite corner in world space). **The hit-testing + resize brain.** |
-| `Geometry.swift` | `CGPoint`/`CGRect` helpers (`rotated`, `distanceToSegment`, `borderBandContains`, `ellipseBorderContains`, `dragFrom:to:`…) and the `Handle` enum. |
+| `DrawObject+Geometry.swift` | `bounds`/`renderBounds`, `hitTest` (border-band + inverse-rotation), `translate`, `resized(handle:to:)` (anchors opposite corner in world space), `scaled(sx:sy:around:)` (group resize), `supportsHandleResize`. **The hit-testing + resize brain.** |
+| `SelectionFrame.swift` | **(M3)** Chrome-only handle geometry derived from the selection: `.box` (single rotatable, 8 handles + rotate), `.endpoints` (line/arrow), `.group` (multi/stroke, 8 handles). `handleHit(at:tolerance:)`. |
+| `Scene+Arrange.swift` | **(M3)** Z-order `reorder(_:_ :)` (front/back/forward/backward within a layer), group queries (`outerGroup`, `expandingGroups`), `align`/`distribute`. |
+| `Geometry.swift` | `CGPoint`/`CGRect` helpers (`rotated`, `distanceToSegment`, `borderBandContains`, `ellipseBorderContains`, `dragFrom:to:`, `oppositeCorner`, `movingCorner`…) and the `Handle` enum. |
+| `Shapes/ShapeLibrary.swift` | **(M3)** 20-entry polygon/star catalog (one data table) driving the toolbar shape picker; every entry maps onto the `polygon` kind. |
 | `CanvasTransform.swift` | **The ONLY pixel↔view conversion site** (invariant 1). `toView`/`toCanvas`/`canvasTolerance`/`zoom(by:about:)`/`fit`/`actualSize`. |
 | `ObjectStyle.swift` | `ObjectStyle`, `RGBAColor`, `Fill`, `DashStyle`, `ShadowSpec`. |
-| `Selection.swift` | `Selection` (multi-select `Set<UUID>` + pixel region), `SelectionShape`, `FloatingPixels`, `LiftMode`. **Scaffolded for M3/M7; region ops not wired yet.** |
+| `Selection.swift` | `Selection` (multi-select `Set<UUID>` + pixel region), `SelectionShape`, `FloatingPixels`, `LiftMode`. **Object multi-select wired (M3); pixel region ops are M7.** |
 | `SurfaceStore.swift` | Lock-guarded `@unchecked Sendable` refcounted CGImage table. `totalBytes` is the M6 memory-budget probe. |
 | `PixelFormat.swift` | The one canonical pixel layout (BGRA premultiplied) + `makeContext` (handled-failure allocation) + `unpremultiply`. |
 | `Tool.swift` | `Tool` enum + display names, SF Symbols, drag-behavior flags. |
@@ -337,7 +389,7 @@ layer knows about points or zoom (invariant 1).
 | --- | --- |
 | `SceneRenderer.swift` | **The single draw routine** (invariant 2) for screen + export + cache. `drawImageYDown` (a y-flip site). Layer loop with isolated-offscreen compositing. |
 | `RenderCaches.swift` | Committed/live split. `committedImage(...)` rebuilds only on key change; `rebuildCount` is asserted by tests. |
-| `ExportService.swift` | `renderFullResolution` / `renderRegion` (both clip to the page rect) + `pngData`. The export y-flip site. |
+| `ExportService.swift` | `renderFullResolution` / `renderRegion` / `renderObjects` (selection-only, for the clipboard image) + `pngData`. The export y-flip site. |
 | `ObjectPaths.swift` | Pure `CGPath` construction shared by render + hit test (roundedRect, polygon/star, quad) and `ArrowGeometry` (shaft pullback + head shapes). |
 | `StrokeGeometry.swift` | Midpoint-quadratic smoothing + one-op polyline stroke (single point → filled ellipse). **M6 replaces the outline with a perfect-freehand port.** |
 | `TextMetrics.swift` | CoreText measure/draw, 3-mode sizing. **M5 adds the editing overlay.** |
@@ -346,7 +398,7 @@ layer knows about points or zoom (invariant 1).
 | File | Purpose |
 | --- | --- |
 | `EditorViewModel.swift` | The hub. Owns `scene` (with the `sceneRevision` didSet), `history`, `interaction`, `selection`, `transform`, tool + style. Pointer handlers, commit gating, undo/redo, viewport commands. |
-| `Interaction.swift` | The editing state machine (`idle`/`drawing`/`draggingObjects`/`resizing`/`rotating`/`marquee`/`panning`/…). Pointer + key handlers are its transitions. |
+| `Interaction.swift` | The editing state machine (`idle`/`drawing`/`draggingObjects`/`resizing`/`rotating`/`marquee`/`panning`/…). Pointer + key handlers are its transitions. `resizing`/`rotating` carry the pre-gesture originals + fixed anchor / start angle (wired in M3). |
 | `History.swift` | Snapshot undo. `begin`/`end` (push-only-if-changed), interactive-edit coalescing, `HistoryEntry` (scene | rasterPatch), `RasterPatch` (materialized, tile-quantized — T1), eviction budget. |
 
 ### Input — AppKit, `@MainActor` (`Sources/Sketcher/Input/`)
@@ -368,12 +420,13 @@ layer knows about points or zoom (invariant 1).
 | --- | --- |
 | `main.swift` | Headless early-exit into `TestRenderMode` **before** `NSApplication` (what makes the pixel harness bare-binary runnable), then the normal app. |
 | `App/AppDelegate.swift` | Regular-app activation policy, builds the menu, opens the blank untitled canvas. |
-| `App/Command.swift` + `CommandDispatch.swift` | **One command enum, one dispatch switch** (invariant 13). Menu/keyboard/toolbar all route here. |
-| `App/MainMenu.swift` | Menu bar built from `Command`. Custom `performUndo:`/`performRedo:` (T8). |
+| `App/Command.swift` + `CommandDispatch.swift` | **One command enum, one dispatch switch** (invariant 13). Menu/keyboard/toolbar all route here. Edit (cut/copy/paste/duplicate) + Arrange commands added in M3. |
+| `App/MainMenu.swift` | Menu bar built from `Command`. Custom `performUndo:`/`performRedo:` (T8). **Arrange** menu (M3). |
 | `Document/SketchDocument.swift` | `@objc(SketchDocument)` NSDocument (T17). read/write via `SceneCodec`, edited-dot wiring, `isRestorable = false`. |
 | `Windows/EditorWindowController.swift` | Hosts the SwiftUI view; `sizingOptions = [.minSize]`; the undo selectors. |
 | `Commands/ExportCommands.swift` | Copy-canvas, `Export…` via NSSavePanel, `dragOutURL` (not yet wired to a drag source). |
 | `Pasteboard/PasteboardWriter.swift` | Writes PNG **and** TIFF, point-sized for Retina; temp-PNG for drag-out. |
+| `Pasteboard/ObjectClipboard.swift` | **(M3)** Object cut/copy/paste via a private UTI (lossless `ObjectSpec` JSON) + PNG/TIFF for interop. Read is object-JSON only (external-image paste is M6/M7 — see D22). |
 | `Export/ImageExporter.swift` | `CGImageDestination` wrapper (PNG/JPEG/TIFF/HEIC) + DPI stamping + decode. |
 | `TestRenderMode.swift` | `--test-render` / `--test-roundtrip` / `--perf` headless entry points. |
 
@@ -391,7 +444,7 @@ layer knows about points or zoom (invariant 1).
 | `scripts/bundle.sh` | Hand-assembles `dist/Sketcher.app`, ad-hoc signs, `plutil -lint`. |
 | `scripts/Info.plist` | Bundle id, document type. Comment marks the M8 flip to `LSTypeIsPackage`. |
 | `scripts/verify-render.{sh,swift}` + `make-fixture.swift` | The pixel-fidelity harness (21 assertions) + its fixtures. |
-| `Tests/SketcherTests/` | `GeometryTests`, `HistoryTests` (+ `EditorViewModelTests`), `CodecTests`, `RenderCacheTests` (+ `ExportTests`). 54 tests. |
+| `Tests/SketcherTests/` | `GeometryTests`, `HistoryTests` (+ `EditorViewModelTests`), `CodecTests`, `RenderCacheTests` (+ `ExportTests`), `SelectionArrangeTests` (M3: frame geometry, drift-free resize/rotate, group scale, z-order/align/distribute, group + clipboard). 75 tests. |
 
 ### Not yet created (planned, per milestone)
 `Model/Brush/*` + `Raster/*` (M6) · `Model/Shapes/*` + `Grouping`/`HitTest`/`Handles`
