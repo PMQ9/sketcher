@@ -13,6 +13,7 @@ enum MainMenu {
         main.addItem(submenu: arrangeMenu(), title: "Arrange")
         main.addItem(submenu: toolsMenu(), title: "Tools")
         main.addItem(submenu: canvasMenu(), title: "Canvas")
+        main.addItem(submenu: colorMenu(), title: "Color")
         main.addItem(submenu: viewMenu(), title: "View")
         main.addItem(submenu: windowMenu(), title: "Window")
         return main
@@ -115,6 +116,7 @@ enum MainMenu {
             (.toolSelect, .select), (.toolBrush, .brush), (.toolEraser, .eraser),
             (.toolRectangle, .rectangle), (.toolEllipse, .ellipse),
             (.toolLine, .line), (.toolArrow, .arrow), (.toolPolygon, .polygon),
+            (.toolRedact, .redact), (.toolEyedropper, .eyedropper),
             (.toolHand, .hand), (.toolZoom, .zoom)
         ]
         for (command, tool) in tools {
@@ -138,6 +140,19 @@ enum MainMenu {
         menu.addCommand(.backgroundTransparent)
         menu.addItem(.separator())
         menu.addCommand(.toggleCanvasMode)
+        return menu
+    }
+
+    private static func colorMenu() -> NSMenu {
+        let menu = NSMenu(title: "Color")
+        // Single-key bindings live in CanvasEventView (they must not fire while a
+        // text field owns the keyboard), so these carry the hint in the title.
+        let swap = menu.addCommand(.swapColors); swap.title = "Swap Colors  (X)"
+        let reset = menu.addCommand(.resetColors); reset.title = "Reset to Black & White  (D)"
+        menu.addItem(.separator())
+        let eyedropper = menu.addCommand(.toolEyedropper); eyedropper.title = "Eyedropper  (I)"
+        let screen = menu.addCommand(.screenEyedropper)
+        screen.title = "Screen Eyedropper\u{2026}  (\u{21E7}I)"
         return menu
     }
 

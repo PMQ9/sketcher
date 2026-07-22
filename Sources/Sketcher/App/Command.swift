@@ -23,6 +23,10 @@ enum Command: String, CaseIterable, Sendable {
     // Tools
     case toolSelect, toolBrush, toolEraser, toolRectangle, toolEllipse
     case toolLine, toolArrow, toolPolygon, toolHand, toolZoom
+    case toolEyedropper, toolRedact
+
+    // Color
+    case swapColors, resetColors, screenEyedropper
 
     // Canvas
     case backgroundLight, backgroundDark, backgroundTransparent
@@ -73,6 +77,11 @@ enum Command: String, CaseIterable, Sendable {
         case .toolPolygon: return "Polygon"
         case .toolHand: return "Hand"
         case .toolZoom: return "Zoom"
+        case .toolEyedropper: return "Eyedropper"
+        case .toolRedact: return "Redact"
+        case .swapColors: return "Swap Colors"
+        case .resetColors: return "Reset to Black & White"
+        case .screenEyedropper: return "Screen Eyedropper\u{2026}"
         case .backgroundLight: return "Light Canvas"
         case .backgroundDark: return "Dark Canvas"
         case .backgroundTransparent: return "Transparent Canvas"

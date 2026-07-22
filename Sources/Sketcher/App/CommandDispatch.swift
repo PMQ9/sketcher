@@ -50,6 +50,12 @@ enum CommandDispatch {
         case .toolPolygon: viewModel.tool = .polygon
         case .toolHand: viewModel.tool = .hand
         case .toolZoom: viewModel.tool = .zoom
+        case .toolEyedropper: viewModel.tool = .eyedropper
+        case .toolRedact: viewModel.tool = .redact
+
+        case .swapColors: viewModel.swapColors()
+        case .resetColors: viewModel.resetColors()
+        case .screenEyedropper: ColorCommands.pickScreenColor(viewModel)
 
         case .backgroundLight: viewModel.setCanvasBackground(.light)
         case .backgroundDark: viewModel.setCanvasBackground(.dark)

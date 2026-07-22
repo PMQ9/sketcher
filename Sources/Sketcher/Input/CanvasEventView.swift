@@ -205,6 +205,29 @@ final class CanvasEventView: NSView {
             viewModel.adjustBrushSize(step: step)
             return
         }
+
+        // Color + redaction single-key actions, shift-aware. Handled before the
+        // tool table because some share a letter with a tool (I, J).
+        switch character.lowercased() {
+        case "x": viewModel.swapColors(); return
+        case "d": viewModel.resetColors(); return
+        case "i":
+            if shift {
+                ColorCommands.pickScreenColor(viewModel)
+            } else {
+                viewModel.tool = .eyedropper
+                window?.invalidateCursorRects(for: self)
+            }
+            return
+        case "j":
+            viewModel.tool = .redact
+            viewModel.redactStyle = shift ? .pixelate : .blur
+            window?.invalidateCursorRects(for: self)
+            return
+        default:
+            break
+        }
+
         if let tool = KeyMap.tool(for: character) {
             viewModel.tool = tool
             window?.invalidateCursorRects(for: self)
