@@ -1,15 +1,25 @@
 import SwiftUI
 
-/// Window content: toolbar over canvas, with a status strip along the bottom.
+/// Window content: toolbar over canvas, a style inspector on the trailing edge,
+/// and a status strip along the bottom.
 struct EditorRootView: View {
     @Bindable var viewModel: EditorViewModel
+    @State private var showInspector = true
 
     var body: some View {
         VStack(spacing: 0) {
             ToolbarView(viewModel: viewModel)
             Divider()
-            CanvasView(viewModel: viewModel)
-                .frame(minWidth: 480, minHeight: 320)
+            HStack(spacing: 0) {
+                CanvasView(viewModel: viewModel)
+                    .frame(minWidth: 480, minHeight: 320)
+                if showInspector {
+                    Divider()
+                    InspectorView(viewModel: viewModel)
+                        .frame(width: 216)
+                        .transition(.move(edge: .trailing))
+                }
+            }
             Divider()
             statusBar
         }
@@ -42,6 +52,16 @@ struct EditorRootView: View {
 
             Text(viewModel.tool.displayName)
                 .foregroundStyle(.secondary)
+
+            Divider().frame(height: 12)
+
+            Button {
+                withAnimation(.easeOut(duration: 0.15)) { showInspector.toggle() }
+            } label: {
+                Image(systemName: "sidebar.trailing")
+            }
+            .buttonStyle(.borderless)
+            .help("Toggle the style inspector")
         }
         .font(.caption)
         .padding(.horizontal, 10)

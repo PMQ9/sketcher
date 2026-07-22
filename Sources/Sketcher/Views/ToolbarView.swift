@@ -10,10 +10,16 @@ import SwiftUI
 struct ToolbarView: View {
     @Bindable var viewModel: EditorViewModel
 
-    /// M1 ships the tools that actually work. The rest arrive with their
-    /// milestones rather than appearing as dead buttons.
+    /// Only tools that actually work are shown — the rest arrive with their
+    /// milestones rather than as dead buttons.
     private static let availableTools: [Tool] = [
-        .select, .brush, .eraser, .rectangle, .ellipse, .line, .arrow, .polygon, .hand
+        .select, .brush, .eraser, .rectangle, .ellipse, .line, .arrow, .polygon,
+        .redact, .eyedropper, .hand
+    ]
+
+    /// The quick-access preset swatches.
+    private static let presetColors: [RGBAColor] = [
+        .black, .white, .red, .orange, .yellow, .green, .blue, .purple
     ]
 
     var body: some View {
@@ -33,6 +39,9 @@ struct ToolbarView: View {
             shapeMenu
             Divider().frame(height: 20)
             colorAndWidth
+            if showLabels {
+                swatchStrip
+            }
             Divider().frame(height: 20)
             backgroundPicker(showLabels: showLabels)
             Spacer(minLength: 8)
@@ -104,10 +113,17 @@ struct ToolbarView: View {
     private var colorAndWidth: some View {
         HStack(spacing: 8) {
             colorWell
+            Button { viewModel.swapColors() } label: {
+                Image(systemName: "arrow.left.arrow.right")
+            }
+            .buttonStyle(.borderless)
+            .help("Swap Colors  (X)")
+            secondaryWell
+            Divider().frame(height: 16)
             Slider(value: strokeWidthPoints, in: 1...64) {
                 Text("Size")
             }
-            .frame(width: 90)
+            .frame(width: 80)
             .help("Stroke width")
             Text("\(Int(viewModel.brush.sizePx / viewModel.scene.canvas.pixelsPerPoint))")
                 .monospacedDigit()
@@ -120,7 +136,48 @@ struct ToolbarView: View {
     private var colorWell: some View {
         ColorPicker("Color", selection: colorBinding, supportsOpacity: true)
             .labelsHidden()
-            .help("Stroke color")
+            .help("Primary color (stroke)")
+    }
+
+    /// The secondary color; clicking it swaps it to primary.
+    private var secondaryWell: some View {
+        Button { viewModel.swapColors() } label: {
+            RoundedRectangle(cornerRadius: 3)
+                .fill(Color(viewModel.secondaryColor))
+                .frame(width: 16, height: 16)
+                .overlay(RoundedRectangle(cornerRadius: 3)
+                    .stroke(.primary.opacity(0.25), lineWidth: 0.5))
+        }
+        .buttonStyle(.plain)
+        .help("Secondary color — click to swap  (X)")
+    }
+
+    /// Preset + recent color swatches. Clicking one recolors the selection (or
+    /// arms the next object when nothing is selected).
+    private var swatchStrip: some View {
+        HStack(spacing: 3) {
+            ForEach(Self.presetColors.indices, id: \.self) { i in
+                swatchButton(Self.presetColors[i])
+            }
+            if !viewModel.recentColors.isEmpty {
+                Divider().frame(height: 16)
+                ForEach(viewModel.recentColors.indices, id: \.self) { i in
+                    swatchButton(viewModel.recentColors[i])
+                }
+            }
+        }
+    }
+
+    private func swatchButton(_ color: RGBAColor) -> some View {
+        Button { viewModel.chooseColor(color) } label: {
+            RoundedRectangle(cornerRadius: 3)
+                .fill(Color(color))
+                .frame(width: 15, height: 15)
+                .overlay(RoundedRectangle(cornerRadius: 3)
+                    .stroke(.primary.opacity(0.2), lineWidth: 0.5))
+        }
+        .buttonStyle(.plain)
+        .help("Use this color")
     }
 
     private func backgroundPicker(showLabels: Bool) -> some View {

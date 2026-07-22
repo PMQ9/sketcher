@@ -159,6 +159,15 @@ struct CanvasView: View {
                                      transform: CanvasTransform) {
         let accent = Color(nsColor: .controlAccentColor)
 
+        // Redaction region preview — the filter draft draws nothing through the
+        // renderer, so show a dimmed rect while the region is dragged out.
+        if case .filter(let payload)? = viewModel.draftObject?.kind {
+            let rect = transform.toView(payload.region)
+            context.fill(Path(rect), with: .color(.black.opacity(0.28)))
+            context.stroke(Path(rect), with: .color(.white.opacity(0.9)),
+                           style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+        }
+
         // Marquee rubber band.
         var marqueeing = false
         if case .marquee(let anchor, let current) = viewModel.interaction {
