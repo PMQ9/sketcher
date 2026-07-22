@@ -30,6 +30,7 @@ struct ToolbarView: View {
     private func row(showLabels: Bool) -> some View {
         HStack(spacing: 10) {
             toolCluster
+            shapeMenu
             Divider().frame(height: 20)
             colorAndWidth
             Divider().frame(height: 20)
@@ -75,6 +76,29 @@ struct ToolbarView: View {
                 .help("\(tool.displayName)  \(shortcutHint(for: tool))")
             }
         }
+    }
+
+    /// The shape-library picker. Choosing an entry arms the polygon tool with
+    /// that shape, so it doubles as a "draw a shape" affordance.
+    private var shapeMenu: some View {
+        Menu {
+            ForEach(ShapeLibrary.entries) { entry in
+                Button {
+                    viewModel.selectShape(entry)
+                } label: {
+                    Label(entry.name, systemImage: entry.symbol)
+                }
+            }
+        } label: {
+            Image(systemName: viewModel.shape.symbol)
+                .frame(width: 22, height: 22)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .foregroundStyle(viewModel.tool == .polygon
+                         ? Color(nsColor: .controlAccentColor) : Color.primary)
+        .help("Shape Library — pick a polygon or star  (U)")
     }
 
     private var colorAndWidth: some View {

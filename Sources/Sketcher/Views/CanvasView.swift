@@ -160,13 +160,15 @@ struct CanvasView: View {
         let accent = Color(nsColor: .controlAccentColor)
 
         // Marquee rubber band.
+        var marqueeing = false
         if case .marquee(let anchor, let current) = viewModel.interaction {
+            marqueeing = true
             let rect = transform.toView(CGRect(dragFrom: anchor, to: current))
             context.fill(Path(rect), with: .color(accent.opacity(0.12)))
             context.stroke(Path(rect), with: .color(accent), lineWidth: 1)
         }
 
-        // Selected object outlines. Handles arrive with the select tool in M3.
+        // A thin border on each selected shape (each in its own rotated frame).
         for id in viewModel.selection.objectIDs {
             guard let object = viewModel.scene.object(with: id) else { continue }
             let corners = object.outlineCorners.map(transform.toView)
@@ -175,7 +177,52 @@ struct CanvasView: View {
             path.move(to: corners[0])
             for corner in corners.dropFirst() { path.addLine(to: corner) }
             path.closeSubpath()
-            context.stroke(path, with: .color(accent), lineWidth: 1.5)
+            context.stroke(path, with: .color(accent), lineWidth: 1)
+        }
+
+        // The interactive frame: a group bounding box plus resize and rotate
+        // handles. Hidden while dragging out a marquee, where the selection is
+        // still being assembled.
+        if !marqueeing, let frame = viewModel.selectionFrame {
+            drawFrame(frame, in: &context, transform: transform)
+        }
+    }
+
+    /// Resize handles (white squares) and the rotate handle (a stalked circle).
+    /// Drawn in VIEW space so they stay a constant size at every zoom, and only
+    /// here — never through `SceneRenderer` — so they can never reach an export.
+    private func drawFrame(_ frame: SelectionFrame, in context: inout GraphicsContext,
+                           transform: CanvasTransform) {
+        let accent = Color(nsColor: .controlAccentColor)
+
+        // Group bounding box; single-object boxes are already outlined above.
+        if frame.style == .group {
+            context.stroke(Path(transform.toView(frame.box)),
+                           with: .color(accent), lineWidth: 1)
+        }
+
+        // Rotate handle: a stalk from the top-edge midpoint to a small circle.
+        if let rotate = frame.handles[.rotate], let top = frame.handles[.top] {
+            let a = transform.toView(top), b = transform.toView(rotate)
+            var stalk = Path()
+            stalk.move(to: a)
+            stalk.addLine(to: b)
+            context.stroke(stalk, with: .color(accent), lineWidth: 1)
+            let r: CGFloat = 4.5
+            let circle = Path(ellipseIn: CGRect(x: b.x - r, y: b.y - r,
+                                                width: r * 2, height: r * 2))
+            context.fill(circle, with: .color(.white))
+            context.stroke(circle, with: .color(accent), lineWidth: 1.5)
+        }
+
+        // Resize handles: white squares with an accent border, legible on any
+        // canvas color.
+        let s: CGFloat = 7
+        for (handle, point) in frame.handles where handle != .rotate {
+            let v = transform.toView(point)
+            let rect = CGRect(x: v.x - s / 2, y: v.y - s / 2, width: s, height: s)
+            context.fill(Path(rect), with: .color(.white))
+            context.stroke(Path(rect), with: .color(accent), lineWidth: 1.5)
         }
     }
 }
