@@ -61,6 +61,30 @@ enum ExportService {
         return ctx.makeImage()
     }
 
+    /// Render just `objects` onto a transparent canvas sized to their union
+    /// bounds. The clipboard image and selection drag-out use this — only the
+    /// selected objects, never whatever they happen to overlap.
+    static func renderObjects(_ objects: [DrawObject], surfaces: SurfaceStore,
+                              pixelsPerPoint: CGFloat, colorSpaceName: String) -> CGImage? {
+        let bounds = objects.reduce(CGRect.null) { $0.unionIgnoringNull($1.renderBounds) }
+        guard !bounds.isNull, bounds.width >= 1, bounds.height >= 1 else { return nil }
+        let size = PixelSize(width: Int(bounds.width.rounded(.up)),
+                             height: Int(bounds.height.rounded(.up)))
+        guard size.isValid else { return nil }
+
+        var canvas = CanvasSpec(pixelSize: size, pixelsPerPoint: pixelsPerPoint,
+                                background: .transparent, mode: .contained)
+        canvas.colorSpaceName = colorSpaceName
+        var scene = Scene(canvas: canvas)
+        // Shift the objects so their bounding box sits at the origin.
+        scene.layers[0].objects = objects.map {
+            var copy = $0
+            copy.translate(by: CGPoint(x: -bounds.minX, y: -bounds.minY))
+            return copy
+        }
+        return renderFullResolution(scene, surfaces: surfaces)
+    }
+
     /// PNG bytes with DPI stamped so paste targets show the image at its
     /// natural size rather than 2x blown up on a Retina source.
     static func pngData(_ image: CGImage, pixelsPerPoint: CGFloat) -> Data? {
