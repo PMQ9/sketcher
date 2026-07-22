@@ -9,8 +9,16 @@ import Foundation
 enum Command: String, CaseIterable, Sendable {
     // Edit
     case undo, redo
+    case cut, copy, paste, pasteInPlace, duplicate
     case delete, selectAll, deselect
-    case copyCanvas, exportImage
+    case exportImage
+
+    // Arrange
+    case bringForward, sendBackward, bringToFront, sendToBack
+    case group, ungroup
+    case alignLeft, alignHCenter, alignRight, alignTop, alignVCenter, alignBottom
+    case distributeHorizontally, distributeVertically
+    case toggleLock, toggleHidden
 
     // Tools
     case toolSelect, toolBrush, toolEraser, toolRectangle, toolEllipse
@@ -30,11 +38,31 @@ enum Command: String, CaseIterable, Sendable {
         switch self {
         case .undo: return "Undo"
         case .redo: return "Redo"
+        case .cut: return "Cut"
+        case .copy: return "Copy"
+        case .paste: return "Paste"
+        case .pasteInPlace: return "Paste in Place"
+        case .duplicate: return "Duplicate"
         case .delete: return "Delete"
         case .selectAll: return "Select All"
         case .deselect: return "Deselect"
-        case .copyCanvas: return "Copy Canvas"
         case .exportImage: return "Export\u{2026}"
+        case .bringForward: return "Bring Forward"
+        case .sendBackward: return "Send Backward"
+        case .bringToFront: return "Bring to Front"
+        case .sendToBack: return "Send to Back"
+        case .group: return "Group"
+        case .ungroup: return "Ungroup"
+        case .alignLeft: return "Align Left"
+        case .alignHCenter: return "Align Center"
+        case .alignRight: return "Align Right"
+        case .alignTop: return "Align Top"
+        case .alignVCenter: return "Align Middle"
+        case .alignBottom: return "Align Bottom"
+        case .distributeHorizontally: return "Distribute Horizontally"
+        case .distributeVertically: return "Distribute Vertically"
+        case .toggleLock: return "Lock / Unlock"
+        case .toggleHidden: return "Hide / Show"
         case .toolSelect: return "Select"
         case .toolBrush: return "Brush"
         case .toolEraser: return "Eraser"
@@ -65,9 +93,20 @@ enum Command: String, CaseIterable, Sendable {
         switch self {
         case .undo: return ("z", [.command])
         case .redo: return ("z", [.command, .shift])
+        case .cut: return ("x", [.command])
+        case .copy: return ("c", [.command])
+        case .paste: return ("v", [.command])
+        case .pasteInPlace: return ("v", [.command, .shift])
+        case .duplicate: return ("d", [.command])
         case .selectAll: return ("a", [.command])
-        case .copyCanvas: return ("c", [.command])
         case .exportImage: return ("e", [.command, .shift])
+        case .bringForward: return ("]", [.command])
+        case .sendBackward: return ("[", [.command])
+        case .bringToFront: return ("]", [.command, .option])
+        case .sendToBack: return ("[", [.command, .option])
+        case .group: return ("g", [.command])
+        case .ungroup: return ("g", [.command, .shift])
+        case .toggleLock: return ("l", [.command, .shift])
         case .zoomIn: return ("+", [.command])
         case .zoomOut: return ("-", [.command])
         case .zoomActualSize: return ("0", [.command])

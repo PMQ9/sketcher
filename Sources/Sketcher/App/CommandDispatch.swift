@@ -8,12 +8,37 @@ enum CommandDispatch {
         switch command {
         case .undo: viewModel.undo()
         case .redo: viewModel.redo()
+        case .cut: viewModel.cut()
+        case .copy:
+            // Context-sensitive, like every editor: copy the selected objects
+            // when there is a selection, else copy the whole canvas as an image.
+            if viewModel.selection.hasObjects { viewModel.copySelection() }
+            else { ExportCommands.copyCanvas(viewModel) }
+        case .paste: viewModel.paste()
+        case .pasteInPlace: viewModel.pasteInPlace()
+        case .duplicate: viewModel.duplicateSelection()
         case .delete: viewModel.deleteSelection()
         case .selectAll: viewModel.selectAll()
         case .deselect: viewModel.escape()
-        case .copyCanvas: ExportCommands.copyCanvas(viewModel)
         case .exportImage:
             ExportCommands.exportImage(viewModel, in: NSApp.keyWindow)
+
+        case .bringForward: viewModel.bringForward()
+        case .sendBackward: viewModel.sendBackward()
+        case .bringToFront: viewModel.bringToFront()
+        case .sendToBack: viewModel.sendToBack()
+        case .group: viewModel.groupSelection()
+        case .ungroup: viewModel.ungroupSelection()
+        case .alignLeft: viewModel.alignSelection(.left)
+        case .alignHCenter: viewModel.alignSelection(.hCenter)
+        case .alignRight: viewModel.alignSelection(.right)
+        case .alignTop: viewModel.alignSelection(.top)
+        case .alignVCenter: viewModel.alignSelection(.vCenter)
+        case .alignBottom: viewModel.alignSelection(.bottom)
+        case .distributeHorizontally: viewModel.distributeSelection(.horizontal)
+        case .distributeVertically: viewModel.distributeSelection(.vertical)
+        case .toggleLock: viewModel.toggleLockSelection()
+        case .toggleHidden: viewModel.toggleHiddenSelection()
 
         case .toolSelect: viewModel.tool = .select
         case .toolBrush: viewModel.tool = .brush
@@ -51,8 +76,17 @@ enum CommandDispatch {
         switch command {
         case .undo: return viewModel.canUndo || viewModel.isGestureInFlight
         case .redo: return viewModel.canRedo
-        case .delete: return viewModel.selection.hasObjects
+        case .cut, .duplicate, .delete: return viewModel.selection.hasObjects
+        case .paste, .pasteInPlace: return ObjectClipboard.hasObjects
         case .deselect: return !viewModel.selection.isEmpty
+        case .bringForward, .sendBackward, .bringToFront, .sendToBack,
+             .ungroup, .toggleLock, .toggleHidden:
+            return viewModel.selection.hasObjects
+        case .group, .alignLeft, .alignHCenter, .alignRight,
+             .alignTop, .alignVCenter, .alignBottom:
+            return viewModel.selection.objectIDs.count >= 2
+        case .distributeHorizontally, .distributeVertically:
+            return viewModel.selection.objectIDs.count >= 3
         default: return true
         }
     }

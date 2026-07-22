@@ -10,6 +10,7 @@ enum MainMenu {
         main.addItem(submenu: appMenu(appName: appName), title: appName)
         main.addItem(submenu: fileMenu(), title: "File")
         main.addItem(submenu: editMenu(), title: "Edit")
+        main.addItem(submenu: arrangeMenu(), title: "Arrange")
         main.addItem(submenu: toolsMenu(), title: "Tools")
         main.addItem(submenu: canvasMenu(), title: "Canvas")
         main.addItem(submenu: viewMenu(), title: "View")
@@ -71,11 +72,40 @@ enum MainMenu {
         menu.addCommand(.undo, action: #selector(EditorWindowController.performUndo(_:)))
         menu.addCommand(.redo, action: #selector(EditorWindowController.performRedo(_:)))
         menu.addItem(.separator())
-        menu.addCommand(.copyCanvas)
+        menu.addCommand(.cut)
+        menu.addCommand(.copy)
+        menu.addCommand(.paste)
+        menu.addCommand(.pasteInPlace)
+        menu.addCommand(.duplicate)
         menu.addItem(.separator())
         menu.addCommand(.selectAll)
         menu.addCommand(.deselect)
         menu.addCommand(.delete)
+        return menu
+    }
+
+    private static func arrangeMenu() -> NSMenu {
+        let menu = NSMenu(title: "Arrange")
+        menu.addCommand(.bringForward)
+        menu.addCommand(.sendBackward)
+        menu.addCommand(.bringToFront)
+        menu.addCommand(.sendToBack)
+        menu.addItem(.separator())
+        menu.addCommand(.group)
+        menu.addCommand(.ungroup)
+        menu.addItem(.separator())
+        let align = NSMenu(title: "Align")
+        for command in [Command.alignLeft, .alignHCenter, .alignRight,
+                        .alignTop, .alignVCenter, .alignBottom] {
+            align.addCommand(command)
+        }
+        align.addItem(.separator())
+        align.addCommand(.distributeHorizontally)
+        align.addCommand(.distributeVertically)
+        menu.addItem(submenu: align, title: "Align")
+        menu.addItem(.separator())
+        menu.addCommand(.toggleLock)
+        menu.addCommand(.toggleHidden)
         return menu
     }
 
