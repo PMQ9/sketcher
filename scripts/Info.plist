@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>com.phamqm.Sketcher</string>
+	<key>CFBundleName</key>
+	<string>Sketcher</string>
+	<key>CFBundleDisplayName</key>
+	<string>Sketcher</string>
+	<key>CFBundleExecutable</key>
+	<string>Sketcher</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>15.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>© 2026 Connor Pham. MIT License.</string>
+
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Sketcher Document</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<!-- M8 converts this to a file package (LSTypeIsPackage + conforms
+			     to com.apple.package) once raster surfaces need their own
+			     files. Until then it is a single JSON document. -->
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.phamqm.sketcher.document</string>
+			</array>
+			<!-- Must match @objc(SketchDocument): NSDocumentClass resolution
+			     fails under SwiftPM's module mangling without the @objc name. -->
+			<key>NSDocumentClass</key>
+			<string>SketchDocument</string>
+		</dict>
+	</array>
+
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.phamqm.sketcher.document</string>
+			<key>UTTypeDescription</key>
+			<string>Sketcher Document</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>sketcher</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
+</dict>
+</plist>
