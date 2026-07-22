@@ -60,6 +60,10 @@ final class EditorViewModel {
     /// The polygon-tool shape (from the shape library), used when a `.polygon`
     /// is dragged out.
     var shape: ShapeLibrary.Entry = ShapeLibrary.default
+    /// Whether the redact tool blurs or pixelates (J vs Shift+J).
+    var redactStyle: RedactStyle = .blur
+    /// Corner radius (canvas px) for the next rectangle drawn.
+    var shapeCornerRadiusPx: CGFloat = 0
 
     var primaryColor: RGBAColor {
         didSet { style.strokeColor = primaryColor }
@@ -107,6 +111,12 @@ final class EditorViewModel {
 
         case .rectangle, .ellipse, .polygon, .line, .arrow:
             beginShape(at: p, modifiers: modifiers)
+
+        case .eyedropper:
+            if let color = sampleCanvas(at: p) { armColor(color) }
+
+        case .redact:
+            beginRedaction(at: p)
 
         default:
             // Tools landing in later milestones fall through to select-like
@@ -484,7 +494,8 @@ final class EditorViewModel {
         let kind: ObjectKind
         switch tool {
         case .rectangle:
-            kind = .rectangle(rect: CGRect(origin: p, size: .zero), cornerRadius: 0)
+            kind = .rectangle(rect: CGRect(origin: p, size: .zero),
+                              cornerRadius: shapeCornerRadiusPx)
         case .ellipse:
             kind = .ellipse(rect: CGRect(origin: p, size: .zero))
         case .polygon:
@@ -535,6 +546,10 @@ final class EditorViewModel {
             payload.end = constrainedEnd(from: anchor, to: p, modifiers: modifiers)
             draft.kind = .arrow(payload)
 
+        case .filter(var payload):
+            payload.region = dragRect(from: anchor, to: p, modifiers: modifiers)
+            draft.kind = .filter(payload)
+
         default:
             break
         }
@@ -578,6 +593,12 @@ final class EditorViewModel {
             if let restored = history.abort() { scene = restored }
             return
         }
+        // A redaction is not an object — it bakes into pixels and destroys the
+        // covered geometry (D11).
+        if tool == .redact, case .filter(let payload) = draft.kind {
+            applyRedaction(region: payload.region)
+            return
+        }
         scene.addObject(draft)
         selection.select(draft.id)
         history.end(scene, name: "Draw \(tool.displayName)")
@@ -601,7 +622,10 @@ final class EditorViewModel {
             return payload.start.distance(to: payload.end) >= 4
         case .stroke:
             return true    // a click is a legitimate dot
-        case .text, .image, .filter, .polyline, .unknown:
+        case .filter(let payload):
+            // A redaction region must be big enough to be meaningful.
+            return hypot(payload.region.width, payload.region.height) >= 6
+        case .text, .image, .polyline, .unknown:
             return true
         }
     }
@@ -674,7 +698,7 @@ final class EditorViewModel {
         scene.removeObjects(ids: selection.objectIDs)
         selection.clear()
         if history.record(from: before, to: scene, name: name) { onChange?(.done) }
-        surfaces.prune(keeping: scene.referencedSurfaceIDs)
+        pruneSurfaces()
     }
 
     func selectAll() {
@@ -716,6 +740,227 @@ final class EditorViewModel {
     func selectShape(_ entry: ShapeLibrary.Entry) {
         shape = entry
         tool = .polygon
+    }
+
+    // MARK: - Colors
+
+    /// Most-recently-used colors, newest first, de-duplicated, capped at 8.
+    private(set) var recentColors: [RGBAColor] = []
+
+    /// Swap primary and secondary (X).
+    func swapColors() {
+        let p = primaryColor
+        primaryColor = secondaryColor
+        secondaryColor = p
+    }
+
+    /// Reset to the classic black foreground / white background (D).
+    func resetColors() {
+        primaryColor = .black
+        secondaryColor = .white
+    }
+
+    func rememberColor(_ color: RGBAColor) {
+        recentColors.removeAll { $0 == color }
+        recentColors.insert(color, at: 0)
+        if recentColors.count > 8 { recentColors.removeLast(recentColors.count - 8) }
+    }
+
+    /// Arm `color` as the primary (for the next object) without touching the
+    /// selection — the eyedropper's behavior.
+    func armColor(_ color: RGBAColor) {
+        primaryColor = color
+        rememberColor(color)
+    }
+
+    /// Arm `color` AND recolor the selected objects' stroke, as one undo step —
+    /// what clicking a swatch does when something is selected.
+    func chooseColor(_ color: RGBAColor) {
+        armColor(color)
+        guard canMutateHistory, selection.hasObjects else { return }
+        let before = scene
+        for id in selection.objectIDs {
+            scene.withObject(id) { $0.style.strokeColor = color }
+        }
+        if history.record(from: before, to: scene, name: "Color") { onChange?(.done) }
+    }
+
+    /// Sample the composited canvas at a canvas-pixel point (the eyedropper).
+    /// Renders a 1×1 region through the real pipeline, so it reads exactly what
+    /// exports — background, blends, and all.
+    func sampleCanvas(at p: CGPoint) -> RGBAColor? {
+        let rect = CGRect(x: p.x.rounded(.down), y: p.y.rounded(.down), width: 1, height: 1)
+        guard let image = ExportService.renderRegion(scene, surfaces: surfaces, rect: rect)
+        else { return nil }
+        return image.firstPixelUnpremultiplied(colorSpace: scene.canvas.cgColorSpace)
+    }
+
+    // MARK: - Redaction (M4)
+
+    private func beginRedaction(at p: CGPoint) {
+        let draft = DrawObject(
+            kind: .filter(FilterPayload(region: CGRect(origin: p, size: .zero),
+                                        descriptor: redactionDescriptor(for: .zero))),
+            style: ObjectStyle(strokeColor: nil))
+        history.begin(scene)
+        interaction = .drawing(draft: draft, anchor: p)
+    }
+
+    /// Redaction radius/block scales with the region so a small mask still
+    /// obliterates its content and a large one is not absurdly heavy.
+    private func redactionDescriptor(for region: CGRect) -> FilterDescriptor {
+        let minDim = max(min(region.width, region.height), 1)
+        switch redactStyle {
+        case .blur: return .gaussianBlur(radiusPx: max(minDim / 8, 12))
+        case .pixelate: return .pixelate(blockPx: max(minDim / 10, 12))
+        }
+    }
+
+    /// Bake the redaction: blur/pixelate the region, DELETE every vector object
+    /// fully inside it, clip partially-covered ones, and drop the opaque patch on
+    /// top — all one undo entry. Destructive at commit (D11): the saved file
+    /// keeps no geometry under the mask.
+    private func applyRedaction(region: CGRect) {
+        let clamped = region.integral.intersection(scene.canvas.pageRect)
+        let descriptor = redactionDescriptor(for: clamped)
+        guard clamped.width >= 2, clamped.height >= 2,
+              let patch = Redaction.render(scene: scene, surfaces: surfaces,
+                                           region: clamped, descriptor: descriptor) else {
+            if let restored = history.abort() { scene = restored }
+            return
+        }
+        let surface = surfaces.register(patch)
+        // `allObjects` is a fresh snapshot, so mutating the scene inside the loop
+        // is safe.
+        for object in scene.allObjects {
+            let b = object.bounds
+            guard !b.isNull else { continue }
+            if clamped.contains(b) {
+                scene.removeObjects(ids: [object.id])
+            } else if b.intersects(clamped) {
+                scene.withObject(object.id) { $0.addErasedRect(clamped) }
+            }
+        }
+        let payload = RasterPayload(
+            surface: surface, rect: clamped,
+            intrinsicPixelSize: PixelSize(width: Int(clamped.width), height: Int(clamped.height)))
+        scene.addObject(DrawObject(kind: .image(payload), style: ObjectStyle(strokeColor: nil)))
+        selection.clear()
+        if history.end(scene, name: "Redact") { onChange?(.done) }
+        pruneSurfaces()
+    }
+
+    /// Drop surfaces referenced by neither the live scene NOR any history entry.
+    /// Keeping the history's surfaces is what lets a redaction survive undo→redo.
+    private func pruneSurfaces() {
+        surfaces.prune(keeping: scene.referencedSurfaceIDs.union(history.referencedSurfaceIDs))
+    }
+
+    // MARK: - Style editing (inspector)
+
+    /// The style the inspector displays: the topmost selected object's, or the
+    /// armed-tool defaults when nothing is selected.
+    var inspectorStyle: ObjectStyle {
+        if let id = orderedSelection().last?.id, let object = scene.object(with: id) {
+            return object.style
+        }
+        return style
+    }
+
+    /// True when a corner-radius control is relevant (a rectangle is selected,
+    /// or the rectangle tool is armed).
+    var inspectorHasRect: Bool {
+        if selection.hasObjects {
+            return selection.objectIDs.contains {
+                if case .rectangle = scene.object(with: $0)?.kind { return true }
+                return false
+            }
+        }
+        return tool == .rectangle
+    }
+
+    var inspectorCornerRadiusPx: CGFloat {
+        if selection.hasObjects {
+            for id in selection.objectIDs {
+                if case .rectangle(_, let radius) = scene.object(with: id)?.kind { return radius }
+            }
+        }
+        return shapeCornerRadiusPx
+    }
+
+    /// Bracket a slider drag so its many value changes coalesce into ONE undo
+    /// entry (only meaningful when a selection is being edited).
+    func beginStyleEdit() {
+        if selection.hasObjects { history.beginInteractive(scene) }
+    }
+
+    func endStyleEdit(_ name: String) {
+        guard selection.hasObjects else { return }
+        if history.endInteractive(scene, name: name) { onChange?(.done) }
+    }
+
+    /// Live style writes. With a selection they edit the objects (bracketed by
+    /// begin/endStyleEdit for sliders, recorded directly for discrete controls);
+    /// with none they edit the armed-tool defaults.
+    func setStrokeWidthPx(_ width: CGFloat) {
+        if selection.hasObjects {
+            for id in selection.objectIDs { scene.withObject(id) { $0.style.strokeWidthPx = width } }
+        } else {
+            style.strokeWidthPx = width
+            brush.sizePx = width
+        }
+    }
+
+    func setOpacity(_ opacity: CGFloat) {
+        if selection.hasObjects {
+            for id in selection.objectIDs { scene.withObject(id) { $0.style.opacity = opacity } }
+        } else {
+            style.opacity = opacity
+        }
+    }
+
+    func setCornerRadiusPx(_ radius: CGFloat) {
+        if selection.hasObjects {
+            for id in selection.objectIDs {
+                scene.withObject(id) {
+                    if case .rectangle(let rect, _) = $0.kind {
+                        $0.kind = .rectangle(rect: rect, cornerRadius: radius)
+                    }
+                }
+            }
+        } else {
+            shapeCornerRadiusPx = radius
+        }
+    }
+
+    func setDash(_ dash: DashStyle) {
+        if selection.hasObjects {
+            let before = scene
+            for id in selection.objectIDs { scene.withObject(id) { $0.style.dash = dash } }
+            if history.record(from: before, to: scene, name: "Dash") { onChange?(.done) }
+        } else {
+            style.dash = dash
+        }
+    }
+
+    /// Toggle a fill on/off for the selection (or the armed-tool default). A new
+    /// fill uses the current primary color.
+    func setFillEnabled(_ enabled: Bool) {
+        let fill: Fill = enabled ? .solid(inspectorStyle.fill.color ?? primaryColor) : .none
+        applyFill(fill)
+    }
+
+    /// Set the fill color of the selection (or the armed-tool default).
+    func setFillColor(_ color: RGBAColor) { applyFill(.solid(color)) }
+
+    private func applyFill(_ fill: Fill) {
+        if selection.hasObjects {
+            let before = scene
+            for id in selection.objectIDs { scene.withObject(id) { $0.style.fill = fill } }
+            if history.record(from: before, to: scene, name: "Fill") { onChange?(.done) }
+        } else {
+            style.fill = fill
+        }
     }
 
     func setCanvasBackground(_ background: CanvasBackground) {
@@ -792,7 +1037,7 @@ final class EditorViewModel {
             // A restored scene may not contain the previously selected objects.
             let live = Set(scene.allObjects.map(\.id))
             selection.objectIDs.formIntersection(live)
-            surfaces.prune(keeping: scene.referencedSurfaceIDs)
+            pruneSurfaces()
         case .rasterPatch:
             break   // M6
         }
@@ -836,12 +1081,15 @@ final class EditorViewModel {
         interaction = .idle
         caches.invalidate()
         if resetHistory { history.clear() }
-        surfaces.prune(keeping: scene.referencedSurfaceIDs)
+        pruneSurfaces()
         primaryColor = newScene.canvas.background.defaultInk
         style.strokeColor = primaryColor
         onChange?(.cleared)
     }
 }
+
+/// How the redact tool obscures its region.
+enum RedactStyle: Sendable { case blur, pixelate }
 
 /// Modifier keys, captured on the same `NSEvent` as the pointer location so the
 /// two can never race. Mirrors `NSEvent.ModifierFlags` without leaking AppKit

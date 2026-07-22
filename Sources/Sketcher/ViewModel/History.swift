@@ -96,6 +96,21 @@ struct History {
     var undoActionName: String? { undoStack.last?.name }
     var redoActionName: String? { redoStack.last?.name }
 
+    /// Every surface any entry (or the in-flight snapshot) still refers to.
+    /// Pruning must keep these, or undoing then redoing a raster edit — a
+    /// redaction, a pasted image — would find its pixels already collected.
+    var referencedSurfaceIDs: Set<SurfaceID> {
+        var ids = Set<SurfaceID>()
+        for entry in undoStack + redoStack {
+            switch entry {
+            case .scene(let scene, _): ids.formUnion(scene.referencedSurfaceIDs)
+            case .rasterPatch(let patch, _): ids.insert(patch.before); ids.insert(patch.after)
+            }
+        }
+        if let pre = preGestureScene { ids.formUnion(pre.referencedSurfaceIDs) }
+        return ids
+    }
+
     // MARK: - Gesture bracket
 
     mutating func begin(_ scene: Scene) {
