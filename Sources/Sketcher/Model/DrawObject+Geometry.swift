@@ -11,6 +11,16 @@ extension DrawObject {
         }
     }
 
+    /// Kinds whose single-object `resized(handle:to:)` does real work. Freehand
+    /// strokes and polylines have no meaningful per-handle resize, so they scale
+    /// as a group instead; unknown objects render nothing.
+    var supportsHandleResize: Bool {
+        switch kind {
+        case .stroke, .polyline, .unknown: return false
+        default: return true
+        }
+    }
+
     /// The point rotation pivots around (the shape's unrotated center).
     var rotationCenter: CGPoint {
         switch kind {
@@ -134,6 +144,70 @@ extension DrawObject {
             erased.subpaths = erased.subpaths.map { $0.map(moved) }
             erasedGeometry = erased
         }
+    }
+
+    /// Scale every point of this object by `(sx, sy)` about `pivot`, in canvas
+    /// pixels. Used for group resize, where several objects scale together
+    /// around the fixed opposite corner of their shared box.
+    ///
+    /// Geometry only: a shape's stroke weight is deliberately NOT scaled (Figma's
+    /// default — a resized rectangle keeps its border weight), but a freehand
+    /// stroke scales its brush width so the whole mark grows, and text scales its
+    /// font size with the vertical factor.
+    func scaled(sx: CGFloat, sy: CGFloat, around pivot: CGPoint) -> DrawObject {
+        var copy = self
+        func sp(_ p: CGPoint) -> CGPoint {
+            CGPoint(x: pivot.x + (p.x - pivot.x) * sx, y: pivot.y + (p.y - pivot.y) * sy)
+        }
+        func sr(_ r: CGRect) -> CGRect {
+            CGRect(dragFrom: sp(CGPoint(x: r.minX, y: r.minY)),
+                   to: sp(CGPoint(x: r.maxX, y: r.maxY)))
+        }
+        switch kind {
+        case .rectangle(let r, let radius):
+            copy.kind = .rectangle(rect: sr(r),
+                                   cornerRadius: radius * Swift.min(abs(sx), abs(sy)))
+        case .ellipse(let r):
+            copy.kind = .ellipse(rect: sr(r))
+        case .polygon(let r, let sides, let ratio):
+            copy.kind = .polygon(rect: sr(r), sides: sides, starInnerRatio: ratio)
+        case .line(let s, let e, let c):
+            copy.kind = .line(start: sp(s), end: sp(e), control: c.map(sp))
+        case .polyline(let points, let closed):
+            copy.kind = .polyline(points: points.map(sp), closed: closed)
+        case .arrow(var payload):
+            payload.start = sp(payload.start)
+            payload.end = sp(payload.end)
+            payload.control = payload.control.map(sp)
+            copy.kind = .arrow(payload)
+        case .stroke(var payload):
+            payload.samples = payload.samples.map {
+                StrokeSample(point: sp($0.point), pressure: $0.pressure,
+                             tilt: $0.tilt, timestamp: $0.timestamp)
+            }
+            payload.brush.sizePx *= (abs(sx) + abs(sy)) / 2
+            copy.kind = .stroke(payload)
+        case .text(var payload):
+            let box = sr(TextMetrics.bounds(of: payload))
+            payload.origin = box.origin
+            payload.boxSize = box.size
+            payload.fontSizePx *= abs(sy)
+            payload.resize = .fixed
+            copy.kind = .text(payload)
+        case .image(var payload):
+            payload.rect = sr(payload.rect)
+            copy.kind = .image(payload)
+        case .filter(var payload):
+            payload.region = sr(payload.region)
+            copy.kind = .filter(payload)
+        case .unknown:
+            break
+        }
+        if var erased = copy.erasedGeometry {
+            erased.subpaths = erased.subpaths.map { $0.map(sp) }
+            copy.erasedGeometry = erased
+        }
+        return copy
     }
 
     /// Hit test in canvas pixels. Shapes hit on their BORDER BAND, not their
