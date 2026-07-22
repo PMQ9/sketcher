@@ -210,6 +210,22 @@ extension DrawObject {
         return copy
     }
 
+    /// Clip a world-space rect out of this object (redaction of a partially
+    /// covered shape). `erasedGeometry` lives in the object's LOCAL frame — the
+    /// renderer applies it after rotating the context, and `hitTest` inverse-
+    /// rotates the probe — so a rotated object maps the rect's corners into local
+    /// space first.
+    mutating func addErasedRect(_ rect: CGRect) {
+        let corners = [CGPoint(x: rect.minX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.minY),
+                       CGPoint(x: rect.maxX, y: rect.maxY), CGPoint(x: rect.minX, y: rect.maxY)]
+        let local = (isRotatable && rotation != 0)
+            ? corners.map { $0.rotated(around: rotationCenter, by: -rotation) }
+            : corners
+        var geometry = erasedGeometry ?? PathGeometry(subpaths: [])
+        geometry.subpaths.append(local)
+        erasedGeometry = geometry
+    }
+
     /// Hit test in canvas pixels. Shapes hit on their BORDER BAND, not their
     /// interior, so an unfilled shape can be clicked through — unless it is
     /// filled, in which case the interior counts too.
