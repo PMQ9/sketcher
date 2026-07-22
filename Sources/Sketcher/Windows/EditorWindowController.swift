@@ -62,12 +62,32 @@ final class EditorWindowController: NSWindowController, NSMenuItemValidation {
         CommandDispatch.perform(command, on: viewModel)
     }
 
+    /// The font panel sends `changeFont:` up the responder chain. While editing
+    /// the `TextSinkView` (earlier in the chain) handles it; when a text object
+    /// is merely selected it reaches here and restyles the selection.
+    @objc func changeFont(_ sender: Any?) {
+        guard let manager = sender as? NSFontManager else { return }
+        let current = NSFont(name: viewModel.textFontName, size: viewModel.textFontSizePx)
+            ?? .systemFont(ofSize: viewModel.textFontSizePx)
+        let converted = manager.convert(current)
+        viewModel.applyTextFont(name: converted.fontName, sizePx: converted.pointSize,
+                                bold: converted.hasTrait(.boldFontMask),
+                                italic: converted.hasTrait(.italicFontMask))
+    }
+
+    /// Object-editing commands whose ⌘-key equivalents must NOT fire while a text
+    /// field editor owns the keyboard — otherwise ⌘V would paste objects onto the
+    /// text being typed. Disabling them lets the event fall to the field editor.
+    private static let fieldEditorBlocked: Set<Command> =
+        [.cut, .copy, .paste, .pasteInPlace, .duplicate, .delete, .selectAll]
+
+    private var isFieldEditorActive: Bool { window?.firstResponder is NSText }
+
     /// `NSWindowController` does not implement menu validation itself, so this
     /// conforms to `NSMenuItemValidation` rather than overriding.
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        if let command = menuItem.sketcherCommand {
-            return CommandDispatch.isEnabled(command, for: viewModel)
-        }
-        return true
+        guard let command = menuItem.sketcherCommand else { return true }
+        if isFieldEditorActive, Self.fieldEditorBlocked.contains(command) { return false }
+        return CommandDispatch.isEnabled(command, for: viewModel)
     }
 }

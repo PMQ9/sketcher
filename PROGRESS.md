@@ -17,22 +17,24 @@ project**. Built in numbered milestones (M1–M8 = v1); each milestone stays run
 
 **Where it stands (2026-07-22):** M1 done, **M2 ~90% done**, **M3 core complete**
 (shapes, multi-select, handles, clipboard, arrange), **M4 core complete** (color
-system, eyedropper, blur/pixelate redaction, style inspector). The app builds
-warning-clean, launches to a blank canvas you can draw on, and has **89 unit
-tests + 21 pixel assertions all green**. The single biggest open question — can
-SwiftUI `Canvas` hold frame rate — has been **answered and resolved** (§7): the
-render cache is mandatory and it works. Nothing is blocked.
+system, eyedropper, blur/pixelate redaction, style inspector), **M5 core complete**
+(multiline text: placement, the `NSTextView` editing sink, CoreText live render,
+styling, font panel, rotated-box editing). The app builds warning-clean, launches
+to a blank canvas you can draw on, and has **108 unit tests + 25 pixel assertions
+all green**. The single biggest open question — can SwiftUI `Canvas` hold frame
+rate — has been **answered and resolved** (§7): the render cache is mandatory and
+it works. Nothing is blocked.
 
-**M1–M4 are all committed** on `main` (23 subsystem commits atop the upstream
-"Initial commit"); the working tree is clean. Next work is **M5 (multiline text)**.
-Commit when the user asks (don't commit unprompted).
+**M1–M5 are committed** on `main`; the working tree is clean. Next work is
+**M6 (raster layers, brush engine, layers panel, raster undo)**. Commit when the
+user asks (don't commit unprompted).
 
 ### Resume in 60 seconds
 
 ```sh
 cd /Users/phamqm/Projects/sketcher
-make test      # 54 tests — must be green before you touch anything
-make verify    # 21 pixel assertions through the real export pipeline
+make test      # 108 tests — must be green before you touch anything
+make verify    # 25 pixel assertions through the real export pipeline
 make run       # launches dist/Sketcher.app — draw a stroke to sanity-check
 .build/release/Sketcher --perf   # re-run the perf gate if you touch rendering
 ```
@@ -40,16 +42,25 @@ make run       # launches dist/Sketcher.app — draw a stroke to sanity-check
 Read order for a new agent: this section → §8 (file map) → `CLAUDE.md` (the 15
 invariants) → §2 (decisions) → §3/§4 (traps + bugs) before editing.
 
-### What to do next (M5, plus small tails)
+### What to do next (M6, plus small tails)
 
-**M3 and M4 core are done** (see their subsections in §1). Next milestone is
-**M5 — multiline text**: `T` places an auto-width box, `NSFontPanel`, inline
-family/size, `Cmd+B/I/U`, alignment, the legibility plate, and rotated-box
-editing. Budget it like the selection subsystem — CoreText-vs-TextKit2 metrics
-divergence, IME, dictation, and font fallback each eat time. `TextMetrics.swift`
-(render + 3-mode sizing) already exists; M5 adds the editing overlay.
+**M3, M4, and M5 core are done** (see their subsections in §1). Next milestone is
+**M6 — raster layers, brush engine, erasers, layers panel, raster undo**: the
+`.raster(SurfaceID)` layer type wired end-to-end, a perfect-freehand port for
+pressure/velocity strokes, three eraser modes, a layers panel, and **tile-quantized
+raster undo proven under a byte budget** (T1 — the project-killer memory trap;
+`SurfaceStore.totalBytes` is already the probe). This is where `SurfaceStore` and
+the `RasterPatch` history entry finally carry real pixels.
 
 **Small tails to mop up when convenient:**
+- **M5 tails** (none blocking): while the text field editor is first responder,
+  `⌘C/⌘X/⌘V/⌘A` are DISABLED (they'd otherwise paste objects onto the edit), so
+  in-field text clipboard + select-all are deferred — the proper fix is
+  first-responder-routed `cut:`/`copy:`/`paste:` menu items (see D33). `⌘Z`
+  mid-edit ABORTS the whole edit (invariant 7) rather than doing within-field
+  undo. IME composition is drawn by CoreText (sink glyphs are clear) and should
+  work, but is **unverified on a device** — no headless way to test it. Font-panel
+  underline/color effects (`changeAttributes:`) aren't handled; `⌘U` is.
 - **M2 drag-out**: `PasteboardWriter.temporaryPNG` exists; needs an `NSItemProvider`
   drag source on a toolbar handle.
 - **M2 export options** (1×/2×/3×, page vs selection, transparency): today `Export…`
@@ -87,7 +98,7 @@ Legend: ☐ not started · ◐ in progress · ☑ done & verified
 | M2 | Viewport, render cache, pixel harness, export, codec, crash recovery | ◐ | `make verify` (21 checks), `--perf`, 54 tests |
 | M3 | Shapes, multi-select, handles, clipboard, arrange | ◐ | 75 tests; core done, deferrals below |
 | M4 | Color system, style inspector, blur redaction | ◐ | 89 tests; core done, tails below |
-| M5 | Multiline text | ☐ | |
+| M5 | Multiline text | ◐ | 108 tests + text pixel fixture; core done, tails below |
 | M6 | Raster layers, brush engine, erasers, layers panel, raster undo | ☐ | |
 | M7 | Regions: select, move, copy, paste, bucket, wand | ☐ | |
 | M8 | Persistence, canvas ops, export formats — **v1 ships here** | ☐ | |
@@ -208,6 +219,48 @@ Tails (none blocking, in §0's "what to do next"):
 - [ ] Non-destructive `.filter` objects (aesthetic blur that stays editable) are M9;
   M4's blur is the destructive privacy redaction only.
 
+### M5 — core complete (2026-07-22)
+
+Delivered and tested (19 new tests: `TextEditingTests.swift`; + a `text.png` pixel
+fixture in the verify harness):
+
+- [x] **Placement.** `T` click places an auto-width box; drag places a fixed-width
+  box (auto-height). Clicking an existing text object edits it instead of stacking
+  a new one. Routed through the existing draft machinery (`updateDraft` grows the
+  box, `commitDraft` opens editing rather than finalizing).
+- [x] **The editing sink (invariant T14).** A transparent `NSTextView`
+  (`Text/TextEditingOverlay.swift`), a CHILD of `CanvasEventView`, is the
+  IME/dictation/spellcheck/caret sink with its **glyphs drawn in clear** — CoreText
+  draws the visible text through the one renderer, so there is no TextKit-vs-CoreText
+  reflow pop at commit. It reports keystrokes back through `updateEditingText`;
+  clicking away resigns it (→ commit); ⌘Return / Esc commit; tool change commits.
+- [x] **One edit = one undo entry.** The whole session is a single `history.begin`/
+  `end` bracket, so typing five lines + bold + a font change collapse into one
+  "Text" entry. `Interaction.editingText` is now a mutating gesture; ⌘Z mid-edit
+  aborts it (new box vanishes, existing one reverts).
+- [x] **Rotated-box editing.** A rotated box un-rotates to 0° for editing (caret/IME
+  geometry is wrong under a rotated parent) and re-rotates on commit — verified by
+  a round-trip test.
+- [x] **Styling.** Bold/italic/underline (`⌘B/I/U`), alignment, line height, font
+  size, legibility plate, and the `NSFontPanel` (`⌘T`, via `changeFont:` routed to
+  the sink while editing or to the window controller for a selected text object).
+  A new **Format** menu and an inspector **Text** section drive them; edits fold
+  into the open Text entry while editing, or record one entry against a selected
+  text object. Empty boxes are discarded on commit (undoably for an existing one).
+- [x] **Persistence.** Every text attribute (font, size, traits, alignment, line
+  height, box/resize mode, plate) round-trips through `SceneCodec` — asserted.
+- [x] **Byte-proof.** A `text.png` fixture renders a bold word through the REAL
+  export pipeline: glyphs ink thousands of pixels, the empty region stays white,
+  and the glyph band carries ink (a wrong y-flip in `TextMetrics.draw` would move
+  it off-canvas).
+
+Tails (none blocking, in §0's "what to do next"): in-field `⌘C/⌘X/⌘V/⌘A` are
+disabled while the field editor is first responder (safe, but text clipboard +
+select-all inside an edit are deferred to first-responder-routed menu items, D33);
+`⌘Z` aborts the edit rather than doing within-field undo; IME is drawn by CoreText
+and **unverified on a device**; font-panel underline/color effects aren't wired
+(`⌘U` is).
+
 ---
 
 ## 2. Technical design decisions
@@ -245,6 +298,11 @@ this list rather than quietly reversing an entry.
 | D26 | **Redaction is a destructive `.image` object on the active vector layer**, not a new raster layer | The plan says "raster layer at the top", but raster layers are M6. An `.image` object renders through the identical path, so redaction ships in M4 with no M6 dependency. Covered objects are DELETED (secret gone from the file); partially-covered ones get the region appended to `erasedGeometry` in their LOCAL frame. Blur radius / pixelate block scale with region size. |
 | D27 | **Eyedropper (`I`) arms the color; it does NOT recolor the selection.** Swatch clicks DO | Picking a color up and painting a color down are different intents — Paint's eyedropper never recolors what is selected. Discrete swatch/inspector actions apply to the selection (one undo entry each); the continuous main color well only arms, to avoid undo spam during a drag. |
 | D28 | **The inspector edits the selection when there is one, else the armed-tool defaults**, and slider drags coalesce via History's interactive bracket | One panel answers both "how will the next shape look" and "restyle these". `beginStyleEdit`/`endStyleEdit` wrap a slider drag (SwiftUI `onEditingChanged`) so 40 value changes become one undo entry — the same coalescing `beginInteractive`/`endInteractive` was built for. |
+| D29 | **The `NSTextView` sink draws its glyphs in CLEAR; CoreText draws the visible text** (invariant T14) | Letting TextKit lay out visible glyphs produces a reflow pop at commit (TextKit 2 and `CTFramesetter` disagree on line breaking). Keeping the sink glyphs clear means the object rendered live (it is in `liveObjectIDs`) via CoreText IS the committed layout — zero reflow by construction. The caret stays visible via `insertionPointColor`; IME composition is drawn by CoreText because `updateEditingText` receives the sink's full string (marked text included). |
+| D30 | **A text edit is one long-lived `Interaction.editingText`, bracketed by a single `history.begin`/`end`** | Typing, bold, alignment, and font changes made during a session all fold into one "Text" undo entry. `editingText` is therefore a *mutating gesture* (so a stray `record` from a menu command can't push into the open bracket); the dedicated text setters mutate the scene directly. ⌘Z mid-edit aborts (invariant 7); tool change commits; clicking away resigns the sink → commit. |
+| D31 | **The sink is a CHILD of `CanvasEventView`, not a sibling SwiftUI layer** | Clicks INSIDE it position the caret; clicks OUTSIDE reach the parent's `mouseDown`, which resigns it → commit. `CanvasEventLayer` carries `editingTextID`/`sceneRevision`/`transform` so SwiftUI re-runs `updateNSView` (→ `syncTextEditing`) exactly when the sink must appear, resize (auto-width growth, zoom), or tear down. The sink's font/paragraph are configured only on an attribute-signature change, so a keystroke never resets it mid-IME. |
+| D32 | **A rotated text box un-rotates to 0° in the scene for editing, re-rotating on commit** | Caret and IME geometry are wrong under a rotated parent, and an axis-aligned overlay is far simpler than a rotated `NSView`. The pre-edit angle is held on `editingOriginalRotation`; net rotation change is zero, so an unchanged edit still pushes no entry. |
+| D33 | **While the field editor is first responder, object-editing ⌘-keys (`⌘C/⌘X/⌘V/⌘A`/Delete/Duplicate) are DISABLED**, not re-routed | Their key equivalents would otherwise paste objects onto the text being typed. Disabling them (via `validateMenuItem`) is safe and non-destructive; the proper fix — first-responder-routed `cut:`/`copy:`/`paste:` menu items so the field editor owns them — is deferred rather than risk regressing M3's object clipboard, which is unit-tested but whose responder-chain routing is not. |
 
 ### Rejected, with reasons
 
@@ -398,7 +456,7 @@ path (the common case) costs as much as the render it was meant to avoid.
 
 ## 8. Architecture / file map
 
-41 source files, ~5.9k lines; 4 test files, ~1k lines. Layered strictly:
+52 source files, ~8.3k lines; 7 test files, ~2.0k lines. Layered strictly:
 **Model → Rendering → ViewModel → Input/Views/App**. The dependency arrow never
 points backwards — Model knows nothing of AppKit, and nothing below the view
 layer knows about points or zoom (invariant 1).
@@ -429,7 +487,7 @@ layer knows about points or zoom (invariant 1).
 | `ExportService.swift` | `renderFullResolution` / `renderRegion` / `renderObjects` (selection-only, for the clipboard image) + `pngData`. The export y-flip site. |
 | `ObjectPaths.swift` | Pure `CGPath` construction shared by render + hit test (roundedRect, polygon/star, quad) and `ArrowGeometry` (shaft pullback + head shapes). |
 | `StrokeGeometry.swift` | Midpoint-quadratic smoothing + one-op polyline stroke (single point → filled ellipse). **M6 replaces the outline with a perfect-freehand port.** |
-| `TextMetrics.swift` | CoreText measure/draw, 3-mode sizing. **M5 adds the editing overlay.** |
+| `TextMetrics.swift` | CoreText measure/draw, 3-mode sizing. Screen == export by construction; the M5 editing overlay lives in `Text/` and never draws visible glyphs. |
 | `CIContextProvider.swift` | **(M4)** One shared `CIContext` (linear working space) for every filter — never one per application. |
 | `Redaction.swift` | **(M4)** Renders a region, blurs/pixelates it (halo-safe clamp+crop, anchored pixelate center), returns the opaque patch. |
 | `PixelSampling.swift` | **(M4)** `CGImage.firstPixelUnpremultiplied` — the eyedropper's readback (invariant 10). |
@@ -437,8 +495,8 @@ layer knows about points or zoom (invariant 1).
 ### ViewModel — `@MainActor` (`Sources/Sketcher/ViewModel/`)
 | File | Purpose |
 | --- | --- |
-| `EditorViewModel.swift` | The hub. Owns `scene` (with the `sceneRevision` didSet), `history`, `interaction`, `selection`, `transform`, tool + style. Pointer handlers, commit gating, undo/redo, viewport commands. |
-| `Interaction.swift` | The editing state machine (`idle`/`drawing`/`draggingObjects`/`resizing`/`rotating`/`marquee`/`panning`/…). Pointer + key handlers are its transitions. `resizing`/`rotating` carry the pre-gesture originals + fixed anchor / start angle (wired in M3). |
+| `EditorViewModel.swift` | The hub. Owns `scene` (with the `sceneRevision` didSet), `history`, `interaction`, `selection`, `transform`, tool + style. Pointer handlers, commit gating, undo/redo, viewport commands. **The M5 text-editing lifecycle** (begin/type/commit/cancel, un-rotate, style setters) lives here too — it mutates the file-private `scene`/`interaction`/`history` like redaction does. |
+| `Interaction.swift` | The editing state machine (`idle`/`drawing`/`draggingObjects`/`resizing`/`rotating`/`editingText`/`marquee`/`panning`). Pointer + key handlers are its transitions. `resizing`/`rotating` carry the pre-gesture originals (M3); `editingText` is a mutating gesture bracketing a whole text session (M5). |
 | `History.swift` | Snapshot undo. `begin`/`end` (push-only-if-changed), interactive-edit coalescing, `HistoryEntry` (scene | rasterPatch), `RasterPatch` (materialized, tile-quantized — T1), eviction budget. |
 
 ### Input — AppKit, `@MainActor` (`Sources/Sketcher/Input/`)
@@ -447,6 +505,11 @@ layer knows about points or zoom (invariant 1).
 | `CanvasEventView.swift` | **The single input path** (invariant 8). NSView; pointer/keys/scroll/magnify/pressure/modifiers off one NSEvent. Converts to canvas space at the boundary. `CanvasEventLayer` bridges it into SwiftUI. |
 | `PointerEvent.swift` | Reads location + pressure + tilt + modifiers off one NSEvent (tablet subtype check, T6). |
 | `KeyMap.swift` | Tool-letter table, delete-key raw scalars (T7), arrow nudge, bracket brush-size. |
+
+### Text — AppKit, `@MainActor` (`Sources/Sketcher/Text/`)
+| File | Purpose |
+| --- | --- |
+| `TextEditingOverlay.swift` | **(M5)** `TextSinkView`: a transparent `NSTextView` used only as an IME/dictation/caret sink, glyphs drawn in clear so CoreText owns the visible text (T14, D29). Reports edits, commits on ⌘Return/Esc/resign, handles the font panel's `changeFont:`. Owned as a child of `CanvasEventView` (D31). |
 
 ### Views — SwiftUI (`Sources/Sketcher/Views/`)
 | File | Purpose |
@@ -467,6 +530,7 @@ layer knows about points or zoom (invariant 1).
 | `Windows/EditorWindowController.swift` | Hosts the SwiftUI view; `sizingOptions = [.minSize]`; the undo selectors. |
 | `Commands/ExportCommands.swift` | Copy-canvas, `Export…` via NSSavePanel, `dragOutURL` (not yet wired to a drag source). |
 | `Commands/ColorCommands.swift` | **(M4)** Screen eyedropper via `NSColorSampler` — kept out of the view model so it stays AppKit-free. |
+| `Commands/FontCommands.swift` | **(M5)** Font-panel plumbing (`NSFontManager.orderFrontFontPanel`), kept out of the view model like `ColorCommands`. |
 | `Pasteboard/PasteboardWriter.swift` | Writes PNG **and** TIFF, point-sized for Retina; temp-PNG for drag-out. |
 | `Pasteboard/ObjectClipboard.swift` | **(M3)** Object cut/copy/paste via a private UTI (lossless `ObjectSpec` JSON) + PNG/TIFF for interop. Read is object-JSON only (external-image paste is M6/M7 — see D22). |
 | `Export/ImageExporter.swift` | `CGImageDestination` wrapper (PNG/JPEG/TIFF/HEIC) + DPI stamping + decode. |
@@ -486,13 +550,14 @@ layer knows about points or zoom (invariant 1).
 | `scripts/bundle.sh` | Hand-assembles `dist/Sketcher.app`, ad-hoc signs, `plutil -lint`. |
 | `scripts/Info.plist` | Bundle id, document type. Comment marks the M8 flip to `LSTypeIsPackage`. |
 | `scripts/verify-render.{sh,swift}` + `make-fixture.swift` | The pixel-fidelity harness (21 assertions) + its fixtures. |
-| `Tests/SketcherTests/` | `GeometryTests`, `HistoryTests` (+ `EditorViewModelTests`), `CodecTests`, `RenderCacheTests` (+ `ExportTests`), `SelectionArrangeTests` (M3), `ColorRedactionTests` (M4: destructive redaction pixel+file tests, undo/redo surface lifecycle, eyedropper, color slots, style inspector). **89 tests.** |
+| `Tests/SketcherTests/` | `GeometryTests`, `HistoryTests` (+ `EditorViewModelTests`), `CodecTests`, `RenderCacheTests` (+ `ExportTests`), `SelectionArrangeTests` (M3), `ColorRedactionTests` (M4), `TextEditingTests` (M5: placement, editing lifecycle, one-entry coalescing, rotation round-trip, styling, layout fidelity, codec round-trip). **108 tests.** |
 
 ### Not yet created (planned, per milestone)
 `Model/Brush/*` + `Raster/*` (M6) · `Model/Shapes/*` + `Grouping`/`HitTest`/`Handles`
-as separate files (M3 — currently inline) · `Text/*` editing overlay (M5) ·
-`Tools/*` per-tool files (M3+) · `Persistence/SceneFile`/`PackageIO` package format
-(M8) · `Views/{CheckerboardView,ZoomControl,LayersPanel,InspectorView}` (inline or
-later). The current layout collapses several planned files into fewer; that is
-tracked in §1 and is not a problem to fix, just a note so the plan's file list
-isn't taken literally.
+as separate files (M3 — currently inline) · `Tools/*` per-tool files (M3+) ·
+`Persistence/SceneFile`/`PackageIO` package format (M8) ·
+`Views/{CheckerboardView,ZoomControl,LayersPanel}` (inline or later). The current
+layout collapses several planned files into fewer; that is tracked in §1 and is not
+a problem to fix, just a note so the plan's file list isn't taken literally. (M5's
+`Text/*` was planned as five files; it landed as one `TextEditingOverlay.swift` plus
+the existing `TextMetrics.swift`, since `TextPayload` lives in `DrawObject.swift`.)

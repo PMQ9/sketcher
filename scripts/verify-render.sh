@@ -19,7 +19,7 @@ echo "==> generating fixtures"
 swift scripts/make-fixture.swift "$WORK" >/dev/null
 
 echo "==> rendering through the export pipeline"
-for fixture in shapes transparent offcanvas; do
+for fixture in shapes transparent offcanvas text; do
 	"$BIN" --test-render "$WORK/$fixture.json" "$WORK/$fixture.png" \
 		| sed "s/^/    $fixture: /"
 done

@@ -217,6 +217,28 @@ struct TextPayload: Equatable, Sendable, Codable {
         case isBold, isItalic, isUnderlined, alignment, lineHeightMultiple, plateColor
     }
 
+    /// Defining `init(from:)` in the body suppresses the synthesized memberwise
+    /// init, so this restores one — every parameter defaulted, so `TextPayload()`
+    /// and partial construction both work.
+    init(string: String = "", origin: CGPoint = .zero, boxSize: CGSize? = nil,
+         resize: Resize = .autoWidth, fontName: String = "Helvetica Neue",
+         fontSizePx: CGFloat = 48, isBold: Bool = false, isItalic: Bool = false,
+         isUnderlined: Bool = false, alignment: TextAlignment = .left,
+         lineHeightMultiple: CGFloat = 1.0, plateColor: RGBAColor? = nil) {
+        self.string = string
+        self.origin = origin
+        self.boxSize = boxSize
+        self.resize = resize
+        self.fontName = fontName
+        self.fontSizePx = fontSizePx
+        self.isBold = isBold
+        self.isItalic = isItalic
+        self.isUnderlined = isUnderlined
+        self.alignment = alignment
+        self.lineHeightMultiple = lineHeightMultiple
+        self.plateColor = plateColor
+    }
+
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         string = try c.decodeIfPresent(String.self, forKey: .string) ?? ""

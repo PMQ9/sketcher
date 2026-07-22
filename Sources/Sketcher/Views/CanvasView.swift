@@ -21,7 +21,10 @@ struct CanvasView: View {
                 // anything the renderer reads has changed.
                 .drawingGroup(opaque: false)
 
-                CanvasEventLayer(viewModel: viewModel)
+                CanvasEventLayer(viewModel: viewModel,
+                                 editingTextID: viewModel.editingTextID,
+                                 sceneRevision: viewModel.sceneRevision,
+                                 transform: viewModel.transform)
             }
             .onAppear { viewModel.layoutIfNeeded(viewSize: geometry.size) }
             .onChange(of: geometry.size) { _, newSize in
@@ -166,6 +169,15 @@ struct CanvasView: View {
             context.fill(Path(rect), with: .color(.black.opacity(0.28)))
             context.stroke(Path(rect), with: .color(.white.opacity(0.9)),
                            style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+        }
+
+        // Text being edited: a faint dashed box so an empty or fixed box is
+        // visible while the caret (drawn by the sink) blinks inside it. Selection
+        // chrome is naturally absent here — editing clears the selection.
+        if let object = viewModel.editingTextObject {
+            let rect = transform.toView(object.bounds).insetBy(dx: -1, dy: -1)
+            context.stroke(Path(rect), with: .color(accent.opacity(0.6)),
+                           style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
         }
 
         // Marquee rubber band.

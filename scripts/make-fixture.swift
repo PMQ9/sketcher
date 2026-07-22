@@ -241,6 +241,64 @@ let offcanvas = """
 }
 """
 
+// ---------------------------------------------------------------------------
+// text.json — a white canvas with one bold text object.
+//
+// Proves text renders through the SAME export pipeline as every other kind
+// (the single-renderer invariant) rather than through some screen-only path:
+// the glyphs must produce real dark pixels in the exported PNG, and the empty
+// region to the right of the word must stay white.
+// ---------------------------------------------------------------------------
+
+let text = """
+{
+  "formatVersion": 1,
+  "minimumReaderVersion": 1,
+  "canvasGeneration": 0,
+  "activeLayerID": "44444444-4444-4444-4444-444444444444",
+  "guides": [],
+  "canvas": {
+    "pixelSize": {"width": 320, "height": 140},
+    "pixelsPerPoint": 1,
+    "colorSpaceName": "kCGColorSpaceSRGB",
+    "mode": "contained",
+    "background": {"kind": "solid", "color": {"r": 1, "g": 1, "b": 1, "a": 1}}
+  },
+  "layers": [
+    {
+      "id": "44444444-4444-4444-4444-444444444444",
+      "name": "Layer 1",
+      "isVisible": true,
+      "isLocked": false,
+      "opacity": 1,
+      "blendMode": "normal",
+      "objects": [
+        {
+          "id": "dddddddd-0000-0000-0000-000000000001",
+          "type": "text",
+          "rotation": 0,
+          "isLocked": false,
+          "isHidden": false,
+          "groupIDs": [],
+          "style": {
+            "strokeColor": {"r": 0, "g": 0, "b": 0, "a": 1},
+            "strokeWidthPx": 0, "dash": "solid", "lineCap": 1, "lineJoin": 1,
+            "opacity": 1, "blendMode": "normal", "antialias": true
+          },
+          "payload": {
+            "string": "Hi", "origin": {"x": 20, "y": 30}, "resize": "autoWidth",
+            "fontName": "Helvetica Neue", "fontSizePx": 72,
+            "isBold": true, "isItalic": false, "isUnderlined": false,
+            "alignment": "left", "lineHeightMultiple": 1
+          }
+        }
+      ]
+    }
+  ]
+}
+"""
+
 write("shapes.json", shapes)
 write("transparent.json", transparent)
 write("offcanvas.json", offcanvas)
+write("text.json", text)

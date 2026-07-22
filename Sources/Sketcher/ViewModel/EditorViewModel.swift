@@ -65,8 +65,30 @@ final class EditorViewModel {
     /// Corner radius (canvas px) for the next rectangle drawn.
     var shapeCornerRadiusPx: CGFloat = 0
 
+    /// Text-tool defaults, inherited by the next text box. The dedicated text
+    /// setters update BOTH the object being edited and these, so a change made
+    /// while editing carries to the next box (Figma's model).
+    var textFontName = "Helvetica Neue"
+    var textFontSizePx: CGFloat = 48
+    var textBold = false
+    var textItalic = false
+    var textUnderlined = false
+    var textAlignment: TextAlignment = .left
+    var textLineHeightMultiple: CGFloat = 1
+    var textPlateEnabled = false
+    /// A text box un-rotates to 0° for editing; this holds the angle to restore
+    /// on commit (caret and IME geometry are wrong under a rotated parent).
+    var editingOriginalRotation: CGFloat = 0
+
     var primaryColor: RGBAColor {
-        didSet { style.strokeColor = primaryColor }
+        didSet {
+            style.strokeColor = primaryColor
+            // Live-recolor the glyphs of the text being edited. The mutation
+            // folds into the single open "Text" history entry (no separate push).
+            if let id = interaction.editingTextID {
+                scene.withObject(id) { $0.style.strokeColor = primaryColor }
+            }
+        }
     }
     var secondaryColor: RGBAColor = .white
 
@@ -117,6 +139,9 @@ final class EditorViewModel {
 
         case .redact:
             beginRedaction(at: p)
+
+        case .text:
+            beginTextTool(at: p, tolerance: tolerance)
 
         default:
             // Tools landing in later milestones fall through to select-like
@@ -180,7 +205,10 @@ final class EditorViewModel {
         case .marquee:
             interaction = .idle
 
-        case .idle, .polyDrafting, .editingText, .panning:
+        case .editingText:
+            break   // editing persists across a stray pointer-up; commit is explicit
+
+        case .idle, .polyDrafting, .panning:
             interaction = .idle
         }
     }
@@ -550,6 +578,15 @@ final class EditorViewModel {
             payload.region = dragRect(from: anchor, to: p, modifiers: modifiers)
             draft.kind = .filter(payload)
 
+        case .text(var payload):
+            // Dragging out the box makes it fixed-width; a click (no drag) stays
+            // auto-width, resolved in `enterTextEditing`.
+            let box = dragRect(from: anchor, to: p, modifiers: modifiers)
+            payload.origin = box.origin
+            payload.boxSize = box.size
+            payload.resize = .fixed
+            draft.kind = .text(payload)
+
         default:
             break
         }
@@ -599,6 +636,12 @@ final class EditorViewModel {
             applyRedaction(region: payload.region)
             return
         }
+        // A text box is not finalized on mouse-up: it opens for editing. The
+        // history bracket stays open until the edit commits (one "Text" entry).
+        if case .text = draft.kind {
+            enterTextEditing(from: draft, anchor: anchor)
+            return
+        }
         scene.addObject(draft)
         selection.select(draft.id)
         history.end(scene, name: "Draw \(tool.displayName)")
@@ -634,6 +677,15 @@ final class EditorViewModel {
 
     func topmostObject(at p: CGPoint, tolerance: CGFloat) -> DrawObject? {
         hitsAt(p, tolerance: tolerance).first
+    }
+
+    /// The topmost editable text object under `p` — the text tool edits an
+    /// existing box instead of stacking a new one on top of it.
+    func topmostTextObject(at p: CGPoint, tolerance: CGFloat) -> DrawObject? {
+        hitsAt(p, tolerance: tolerance).first {
+            if case .text = $0.kind { return true }
+            return false
+        }
     }
 
     /// Every object under `p`, topmost first (later layers and later objects are
@@ -1000,7 +1052,12 @@ final class EditorViewModel {
             interaction = .idle
             if let restored = history.abort() { scene = restored }
             return true
-        case .idle, .editingText, .panning:
+        case .editingText:
+            // ⌘Z mid-edit abandons the edit (a brand-new box disappears; an
+            // existing one reverts), consistent with mid-gesture abort.
+            cancelTextEditing()
+            return true
+        case .idle, .panning:
             return false
         }
     }
@@ -1009,9 +1066,12 @@ final class EditorViewModel {
     /// committable, discard what is not.
     private func resolveInFlightInteraction() {
         switch interaction {
+        case .editingText:
+            // Switching tools keeps the text, as clicking away does.
+            commitTextEditing()
         case .drawing, .polyDrafting, .marquee, .draggingObjects, .resizing, .rotating:
             abortInFlightGesture()
-        case .idle, .editingText, .panning:
+        case .idle, .panning:
             break
         }
     }
@@ -1086,6 +1146,310 @@ final class EditorViewModel {
         style.strokeColor = primaryColor
         onChange?(.cleared)
     }
+}
+
+// MARK: - Text editing (M5)
+
+/// The multiline-text editing lifecycle.
+///
+/// A text edit is one long-lived interaction, `Interaction.editingText(id)`,
+/// bracketed by a SINGLE `history.begin`/`end` pair — so typing five lines,
+/// toggling bold, and changing the font all collapse into one "Text" undo
+/// entry. Every keystroke is written straight into the object's payload, so
+/// CoreText redraws it live (the object is in `liveObjectIDs`); there is never a
+/// second layout to pop at commit, which is the whole point of invariant T14.
+///
+/// The `NSTextView` sink (`TextEditingOverlay`) drives these methods: it reports
+/// string changes through `updateEditingText`, and commits on resign / ⌘Return /
+/// tool change. It never lays out visible glyphs — CoreText owns that.
+///
+/// Kept in this file (not a separate extension file) because it mutates the
+/// file-private `scene` / `interaction` / `history`, exactly like redaction.
+extension EditorViewModel {
+    /// The text object being edited, or nil.
+    var editingTextID: UUID? { interaction.editingTextID }
+
+    var isEditingText: Bool { interaction.editingTextID != nil }
+
+    /// True when text formatting applies to something: a live edit, or a text
+    /// object in the selection. Drives the Format menu's enablement.
+    var hasEditableText: Bool {
+        if isEditingText { return true }
+        return selection.objectIDs.contains {
+            if case .text = scene.object(with: $0)?.kind { return true }
+            return false
+        }
+    }
+
+    /// The live object being edited (rotation is 0 while editing), for the
+    /// overlay to position and style itself against.
+    var editingTextObject: DrawObject? {
+        guard let id = interaction.editingTextID else { return nil }
+        return scene.object(with: id)
+    }
+
+    // MARK: Entering
+
+    /// Text-tool mouse-down: commit any prior edit, then either edit the text
+    /// box under the pointer or start dragging out a new one. A plain click
+    /// (no drag) becomes an auto-width box; a drag becomes a fixed box — the
+    /// distinction is resolved in `enterTextEditing`.
+    func beginTextTool(at p: CGPoint, tolerance: CGFloat) {
+        if isEditingText { commitTextEditing() }
+
+        if let hit = topmostTextObject(at: p, tolerance: tolerance) {
+            beginEditing(hit.id)
+            return
+        }
+
+        let payload = TextPayload(
+            origin: p, resize: .autoWidth,
+            fontName: textFontName, fontSizePx: textFontSizePx,
+            isBold: textBold, isItalic: textItalic, isUnderlined: textUnderlined,
+            alignment: textAlignment, lineHeightMultiple: textLineHeightMultiple,
+            plateColor: textPlateEnabled ? platePaperColor : nil)
+        let draft = DrawObject(kind: .text(payload), style: newTextStyle)
+        history.begin(scene)
+        interaction = .drawing(draft: draft, anchor: p)
+    }
+
+    /// Called from `commitDraft` when a text-box drag finishes: fix up the sizing
+    /// mode, insert the (still empty) object, and open it for editing. The history
+    /// bracket opened in `beginTextTool` stays open until `commitTextEditing`.
+    func enterTextEditing(from draft: DrawObject, anchor: CGPoint) {
+        guard case .text(var payload) = draft.kind else { return }
+        if let box = payload.boxSize, min(box.width, box.height) >= minTextDragPx {
+            payload.resize = .fixed
+        } else {
+            // Too small to be a deliberate box: an auto-width box at the click.
+            payload.boxSize = nil
+            payload.resize = .autoWidth
+            payload.origin = anchor
+        }
+        var object = draft
+        object.kind = .text(payload)
+        scene.addObject(object)
+        editingOriginalRotation = 0
+        selection.clear()
+        interaction = .editingText(id: object.id)
+    }
+
+    /// Open an existing text object for editing. A rotated box un-rotates to 0°
+    /// for the duration (caret/IME geometry is wrong under a rotated parent) and
+    /// re-rotates on commit.
+    func beginEditing(_ id: UUID) {
+        guard let object = scene.object(with: id), case .text(let payload) = object.kind
+        else { return }
+        history.begin(scene)
+        editingOriginalRotation = object.rotation
+        if object.rotation != 0 {
+            scene.withObject(id) { $0.rotation = 0 }
+        }
+        syncTextDefaults(from: payload)
+        selection.clear()
+        interaction = .editingText(id: id)
+    }
+
+    // MARK: Live typing
+
+    /// Write the field editor's current string straight into the payload, so
+    /// CoreText re-lays-out and redraws this frame. Folds into the open bracket.
+    func updateEditingText(_ string: String) {
+        guard let id = interaction.editingTextID else { return }
+        scene.withObject(id) {
+            guard case .text(var payload) = $0.kind else { return }
+            guard payload.string != string else { return }
+            payload.string = string
+            $0.kind = .text(payload)
+        }
+    }
+
+    // MARK: Committing / cancelling
+
+    /// Finish editing, keeping the text. An empty box leaves nothing behind and
+    /// is removed. Restores the pre-edit rotation. One "Text" undo entry.
+    @discardableResult
+    func commitTextEditing() -> Bool {
+        guard let id = interaction.editingTextID else { return false }
+        let rotation = editingOriginalRotation
+        interaction = .idle
+        editingOriginalRotation = 0
+
+        let string: String
+        if case .text(let payload)? = scene.object(with: id)?.kind {
+            string = payload.string
+        } else {
+            string = ""
+        }
+
+        if string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            // Removing the box makes the scene equal the pre-edit snapshot for a
+            // brand-new box (no entry pushed), or different for an existing one
+            // the user cleared (one entry, so undo brings it back).
+            scene.removeObjects(ids: [id])
+            selection.clear()
+            let changed = history.end(scene, name: "Text")
+            if changed { onChange?(.done) }
+            pruneSurfaces()
+            return false
+        }
+
+        if rotation != 0 { scene.withObject(id) { $0.rotation = rotation } }
+        selection.select(id)
+        let changed = history.end(scene, name: "Text")
+        if changed { onChange?(.done) }
+        return changed
+    }
+
+    /// Abandon the edit: a new box disappears, an existing one reverts. Used by
+    /// ⌘Z mid-edit.
+    func cancelTextEditing() {
+        guard interaction.editingTextID != nil else { return }
+        interaction = .idle
+        editingOriginalRotation = 0
+        if let restored = history.abort() { scene = restored }
+        selection.clear()
+        pruneSurfaces()
+    }
+
+    // MARK: Text style
+
+    /// The payload whose attributes the Format menu and inspector reflect: the
+    /// object being edited, else the topmost selected text object.
+    var representativeTextPayload: TextPayload? {
+        if let id = interaction.editingTextID, case .text(let p)? = scene.object(with: id)?.kind {
+            return p
+        }
+        for object in orderedSelection().reversed() {
+            if case .text(let p) = object.kind { return p }
+        }
+        return nil
+    }
+
+    private var selectedTextIDs: [UUID] {
+        selection.objectIDs.filter {
+            if case .text = scene.object(with: $0)?.kind { return true }
+            return false
+        }
+    }
+
+    /// Apply a text-payload edit to the live targets — the object being edited
+    /// (folded into the open "Text" entry), else the selected text objects.
+    ///
+    /// When a slider drag has an interactive bracket open (`beginStyleEdit`), the
+    /// mutation is direct and the matching `endStyleEdit` records ONE coalesced
+    /// entry; otherwise a discrete edit records immediately.
+    private func mutateTextTargets(_ name: String, _ body: (inout TextPayload) -> Void) {
+        func applyBody(_ id: UUID) {
+            scene.withObject(id) {
+                guard case .text(var payload) = $0.kind else { return }
+                body(&payload)
+                $0.kind = .text(payload)
+            }
+        }
+        if let id = interaction.editingTextID {
+            applyBody(id)
+            return
+        }
+        let ids = selectedTextIDs
+        guard canMutateHistory, !ids.isEmpty else { return }
+        if history.isGestureInFlight {
+            ids.forEach(applyBody)   // coalesced by the interactive bracket
+            return
+        }
+        let before = scene
+        ids.forEach(applyBody)
+        if history.record(from: before, to: scene, name: name) { onChange?(.done) }
+    }
+
+    func toggleTextBold() {
+        let value = !(representativeTextPayload?.isBold ?? textBold)
+        textBold = value
+        mutateTextTargets("Bold") { $0.isBold = value }
+    }
+
+    func toggleTextItalic() {
+        let value = !(representativeTextPayload?.isItalic ?? textItalic)
+        textItalic = value
+        mutateTextTargets("Italic") { $0.isItalic = value }
+    }
+
+    func toggleTextUnderline() {
+        let value = !(representativeTextPayload?.isUnderlined ?? textUnderlined)
+        textUnderlined = value
+        mutateTextTargets("Underline") { $0.isUnderlined = value }
+    }
+
+    func setTextAlignment(_ alignment: TextAlignment) {
+        textAlignment = alignment
+        mutateTextTargets("Align Text") { $0.alignment = alignment }
+    }
+
+    func setTextLineHeight(_ multiple: CGFloat) {
+        let value = max(multiple, 0.5)
+        textLineHeightMultiple = value
+        mutateTextTargets("Line Height") { $0.lineHeightMultiple = value }
+    }
+
+    func setTextFontSize(_ px: CGFloat) {
+        let value = max(px, 1)
+        textFontSizePx = value
+        mutateTextTargets("Font Size") { $0.fontSizePx = value }
+    }
+
+    func toggleTextPlate() {
+        let on = !(representativeTextPayload?.plateColor != nil)
+        textPlateEnabled = on
+        let plate = on ? platePaperColor : nil
+        mutateTextTargets("Text Plate") { $0.plateColor = plate }
+    }
+
+    /// Apply a font family and/or size (canvas pixels) and traits — the font
+    /// panel and inspector family picker route here.
+    func applyTextFont(name: String? = nil, sizePx: CGFloat? = nil,
+                       bold: Bool? = nil, italic: Bool? = nil) {
+        if let name { textFontName = name }
+        if let sizePx { textFontSizePx = max(sizePx, 1) }
+        if let bold { textBold = bold }
+        if let italic { textItalic = italic }
+        mutateTextTargets("Font") {
+            if let name { $0.fontName = name }
+            if let sizePx { $0.fontSizePx = max(sizePx, 1) }
+            if let bold { $0.isBold = bold }
+            if let italic { $0.isItalic = italic }
+        }
+    }
+
+    // MARK: Text helpers
+
+    private func syncTextDefaults(from payload: TextPayload) {
+        textFontName = payload.fontName
+        textFontSizePx = payload.fontSizePx
+        textBold = payload.isBold
+        textItalic = payload.isItalic
+        textUnderlined = payload.isUnderlined
+        textAlignment = payload.alignment
+        textLineHeightMultiple = payload.lineHeightMultiple
+        textPlateEnabled = payload.plateColor != nil
+    }
+
+    /// Style for a new text object: glyphs use `strokeColor`, no fill.
+    private var newTextStyle: ObjectStyle {
+        var style = ObjectStyle(strokeColor: primaryColor)
+        style.fill = .none
+        return style
+    }
+
+    /// A legibility plate that contrasts the current ink — light paper behind
+    /// dark text, dark paper behind light text.
+    private var platePaperColor: RGBAColor {
+        primaryColor.luminance < 0.5
+            ? RGBAColor(r: 1, g: 1, b: 1, a: 0.85)
+            : RGBAColor(r: 0.10, g: 0.10, b: 0.11, a: 0.85)
+    }
+
+    /// Below this drag size a text placement is treated as a click (auto-width).
+    private var minTextDragPx: CGFloat { scene.canvas.px(fromPoints: 8) }
 }
 
 /// How the redact tool obscures its region.

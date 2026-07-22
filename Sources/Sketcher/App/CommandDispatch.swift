@@ -57,6 +57,15 @@ enum CommandDispatch {
         case .resetColors: viewModel.resetColors()
         case .screenEyedropper: ColorCommands.pickScreenColor(viewModel)
 
+        case .fontPanel: FontCommands.showFontPanel(viewModel)
+        case .textBold: viewModel.toggleTextBold()
+        case .textItalic: viewModel.toggleTextItalic()
+        case .textUnderline: viewModel.toggleTextUnderline()
+        case .textAlignLeft: viewModel.setTextAlignment(.left)
+        case .textAlignCenter: viewModel.setTextAlignment(.center)
+        case .textAlignRight: viewModel.setTextAlignment(.right)
+        case .textPlate: viewModel.toggleTextPlate()
+
         case .backgroundLight: viewModel.setCanvasBackground(.light)
         case .backgroundDark: viewModel.setCanvasBackground(.dark)
         case .backgroundTransparent: viewModel.setCanvasBackground(.transparent)
@@ -93,6 +102,9 @@ enum CommandDispatch {
             return viewModel.selection.objectIDs.count >= 2
         case .distributeHorizontally, .distributeVertically:
             return viewModel.selection.objectIDs.count >= 3
+        case .fontPanel, .textBold, .textItalic, .textUnderline,
+             .textAlignLeft, .textAlignCenter, .textAlignRight, .textPlate:
+            return viewModel.hasEditableText
         default: return true
         }
     }

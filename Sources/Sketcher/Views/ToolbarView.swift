@@ -14,7 +14,7 @@ struct ToolbarView: View {
     /// milestones rather than as dead buttons.
     private static let availableTools: [Tool] = [
         .select, .brush, .eraser, .rectangle, .ellipse, .line, .arrow, .polygon,
-        .redact, .eyedropper, .hand
+        .text, .redact, .eyedropper, .hand
     ]
 
     /// The quick-access preset swatches.

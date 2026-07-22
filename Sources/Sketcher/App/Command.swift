@@ -28,6 +28,12 @@ enum Command: String, CaseIterable, Sendable {
     // Color
     case swapColors, resetColors, screenEyedropper
 
+    // Text / format
+    case fontPanel
+    case textBold, textItalic, textUnderline
+    case textAlignLeft, textAlignCenter, textAlignRight
+    case textPlate
+
     // Canvas
     case backgroundLight, backgroundDark, backgroundTransparent
     case toggleCanvasMode
@@ -82,6 +88,14 @@ enum Command: String, CaseIterable, Sendable {
         case .swapColors: return "Swap Colors"
         case .resetColors: return "Reset to Black & White"
         case .screenEyedropper: return "Screen Eyedropper\u{2026}"
+        case .fontPanel: return "Show Fonts\u{2026}"
+        case .textBold: return "Bold"
+        case .textItalic: return "Italic"
+        case .textUnderline: return "Underline"
+        case .textAlignLeft: return "Align Left"
+        case .textAlignCenter: return "Center"
+        case .textAlignRight: return "Align Right"
+        case .textPlate: return "Legibility Plate"
         case .backgroundLight: return "Light Canvas"
         case .backgroundDark: return "Dark Canvas"
         case .backgroundTransparent: return "Transparent Canvas"
@@ -116,6 +130,10 @@ enum Command: String, CaseIterable, Sendable {
         case .group: return ("g", [.command])
         case .ungroup: return ("g", [.command, .shift])
         case .toggleLock: return ("l", [.command, .shift])
+        case .fontPanel: return ("t", [.command])
+        case .textBold: return ("b", [.command])
+        case .textItalic: return ("i", [.command])
+        case .textUnderline: return ("u", [.command])
         case .zoomIn: return ("+", [.command])
         case .zoomOut: return ("-", [.command])
         case .zoomActualSize: return ("0", [.command])

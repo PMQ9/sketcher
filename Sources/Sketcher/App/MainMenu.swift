@@ -14,6 +14,7 @@ enum MainMenu {
         main.addItem(submenu: toolsMenu(), title: "Tools")
         main.addItem(submenu: canvasMenu(), title: "Canvas")
         main.addItem(submenu: colorMenu(), title: "Color")
+        main.addItem(submenu: formatMenu(), title: "Format")
         main.addItem(submenu: viewMenu(), title: "View")
         main.addItem(submenu: windowMenu(), title: "Window")
         return main
@@ -153,6 +154,24 @@ enum MainMenu {
         let eyedropper = menu.addCommand(.toolEyedropper); eyedropper.title = "Eyedropper  (I)"
         let screen = menu.addCommand(.screenEyedropper)
         screen.title = "Screen Eyedropper\u{2026}  (\u{21E7}I)"
+        return menu
+    }
+
+    private static func formatMenu() -> NSMenu {
+        let menu = NSMenu(title: "Format")
+        menu.addCommand(.fontPanel)
+        menu.addItem(.separator())
+        menu.addCommand(.textBold)
+        menu.addCommand(.textItalic)
+        menu.addCommand(.textUnderline)
+        menu.addItem(.separator())
+        let align = NSMenu(title: "Text Alignment")
+        align.addCommand(.textAlignLeft)
+        align.addCommand(.textAlignCenter)
+        align.addCommand(.textAlignRight)
+        menu.addItem(submenu: align, title: "Text Alignment")
+        menu.addItem(.separator())
+        menu.addCommand(.textPlate)
         return menu
     }
 

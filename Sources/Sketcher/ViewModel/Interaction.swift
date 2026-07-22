@@ -40,11 +40,22 @@ enum Interaction: Equatable {
     /// True while a drag is actively modifying the document. History-mutating
     /// actions are refused in these states, because the single pre-gesture
     /// snapshot slot is occupied and writing to it would corrupt history.
+    ///
+    /// `editingText` counts: a text edit is bracketed by one `begin`/`end` pair
+    /// over the whole session, so a stray `record` from a menu command mid-edit
+    /// would push into an open bracket. The dedicated text setters mutate the
+    /// scene directly instead, folding into the single "Text" entry at commit.
     var isMutatingGesture: Bool {
         switch self {
-        case .drawing, .draggingObjects, .resizing, .rotating: return true
-        case .idle, .polyDrafting, .editingText, .marquee, .panning: return false
+        case .drawing, .draggingObjects, .resizing, .rotating, .editingText: return true
+        case .idle, .polyDrafting, .marquee, .panning: return false
         }
+    }
+
+    /// The text object being edited, or nil.
+    var editingTextID: UUID? {
+        if case .editingText(let id) = self { return id }
+        return nil
     }
 
     /// The object currently being drawn, which the renderer must exclude from

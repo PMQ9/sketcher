@@ -36,6 +36,18 @@ final class CanvasEventView: NSView {
     /// Without it, a jittery click becomes a 1px move and a junk undo entry.
     private static let dragSlop: CGFloat = 2
 
+    // MARK: - Text editing (M5)
+
+    /// The `NSTextView` input sink, present only while a text object is being
+    /// edited. It is a child of this view, so clicks INSIDE it position the
+    /// caret while clicks OUTSIDE reach `mouseDown` and commit by resigning it.
+    private var textSink: TextSinkView?
+    /// Set while tearing the sink down so its resign does not re-commit.
+    private var suppressTextCommit = false
+    /// The attribute signature last pushed into the sink, so reconfiguring it
+    /// (which can disrupt an in-flight IME composition) happens only on change.
+    private var sinkSignature: String?
+
     init(viewModel: EditorViewModel) {
         self.viewModel = viewModel
         super.init(frame: .zero)
@@ -250,6 +262,120 @@ final class CanvasEventView: NSView {
         window?.firstResponder is NSText
     }
 
+    // MARK: - Text editing overlay
+
+    /// Reconcile the sink with the view model's editing state. Called from
+    /// `CanvasEventLayer.updateNSView`, which SwiftUI re-runs whenever the
+    /// editing id, scene, or viewport changes — exactly when the sink must
+    /// appear, resize (auto-width growth, zoom), or tear down.
+    func syncTextEditing() {
+        guard viewModel.isEditingText,
+              let object = viewModel.editingTextObject,
+              case .text(let payload) = object.kind,
+              window != nil else {
+            teardownTextSink()
+            return
+        }
+
+        let sink = ensureTextSink()
+        let transform = viewModel.transform
+
+        // The box in view points. `object.bounds` is the CoreText layout box for
+        // both fixed and auto-width, so the sink tracks the visible text.
+        sink.frame = transform.toView(object.bounds)
+
+        // Reconfigure font/alignment/line-height only when they actually change,
+        // so a keystroke (which round-trips through the payload) does not reset
+        // the field editor mid-composition.
+        let ink = object.style.strokeColor ?? .black
+        let signature = attributeSignature(payload, scale: transform.scale, ink: ink)
+        if signature != sinkSignature {
+            configure(sink, payload: payload, scale: transform.scale, ink: ink)
+            sinkSignature = signature
+        }
+
+        // Adopt an externally-changed string (an undo, say) without clobbering
+        // an in-flight IME composition or the caret during normal typing.
+        if !sink.hasMarkedText(), sink.string != payload.string {
+            sink.string = payload.string
+        }
+
+        if window?.firstResponder !== sink {
+            window?.makeFirstResponder(sink)
+            let end = (sink.string as NSString).length
+            sink.setSelectedRange(NSRange(location: end, length: 0))
+        }
+    }
+
+    private func ensureTextSink() -> TextSinkView {
+        if let sink = textSink { return sink }
+        let sink = TextSinkView.make()
+        sink.onEdit = { [weak self] string in self?.viewModel.updateEditingText(string) }
+        sink.onCommit = { [weak self] in
+            guard let self, !self.suppressTextCommit else { return }
+            self.viewModel.commitTextEditing()
+        }
+        sink.onResign = { [weak self] in
+            guard let self, !self.suppressTextCommit else { return }
+            self.viewModel.commitTextEditing()
+        }
+        sink.onFont = { [weak self] font in
+            guard let self else { return }
+            let scale = self.viewModel.transform.scale
+            self.viewModel.applyTextFont(
+                name: font.fontName,
+                sizePx: font.pointSize / max(scale, 0.0001),
+                bold: font.hasTrait(.boldFontMask),
+                italic: font.hasTrait(.italicFontMask))
+        }
+        addSubview(sink)
+        textSink = sink
+        sinkSignature = nil
+        return sink
+    }
+
+    private func teardownTextSink() {
+        guard let sink = textSink else { return }
+        suppressTextCommit = true
+        if window?.firstResponder === sink { window?.makeFirstResponder(self) }
+        sink.removeFromSuperview()
+        textSink = nil
+        sinkSignature = nil
+        suppressTextCommit = false
+    }
+
+    private func configure(_ sink: TextSinkView, payload: TextPayload,
+                           scale: CGFloat, ink: RGBAColor) {
+        let font = TextSinkView.font(for: payload, scale: scale)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = payload.alignment.nsAlignment
+        paragraph.lineHeightMultiple = payload.lineHeightMultiple
+        sink.font = font
+        sink.alignment = payload.alignment.nsAlignment
+        sink.defaultParagraphStyle = paragraph
+        sink.insertionPointColor = ink.nsColor
+        // Glyphs stay clear (CoreText draws them); only the caret is visible.
+        sink.typingAttributes = [
+            .font: font,
+            .foregroundColor: NSColor.clear,
+            .paragraphStyle: paragraph
+        ]
+        if payload.resize == .autoWidth {
+            sink.textContainer?.widthTracksTextView = false
+            sink.textContainer?.size = CGSize(width: CGFloat.greatestFiniteMagnitude,
+                                              height: CGFloat.greatestFiniteMagnitude)
+        } else {
+            sink.textContainer?.widthTracksTextView = true
+        }
+    }
+
+    private func attributeSignature(_ payload: TextPayload, scale: CGFloat,
+                                    ink: RGBAColor) -> String {
+        "\(payload.fontName)|\(payload.fontSizePx)|\(payload.isBold)|\(payload.isItalic)|"
+            + "\(payload.alignment)|\(payload.lineHeightMultiple)|\(payload.resize)|"
+            + "\(scale)|\(ink)"
+    }
+
     // MARK: - Cursor
 
     override func resetCursorRects() {
@@ -274,12 +400,20 @@ final class CanvasEventView: NSView {
 /// so the AppKit view keeps its first responder status across SwiftUI updates.
 struct CanvasEventLayer: NSViewRepresentable {
     let viewModel: EditorViewModel
+    /// These are read in `CanvasView.body` purely so SwiftUI re-runs
+    /// `updateNSView` when editing starts/stops, the scene changes, or the
+    /// viewport moves — exactly when the text-editing child must appear, resize,
+    /// or reposition. (`syncTextEditing` itself reads the live view model.)
+    var editingTextID: UUID?
+    var sceneRevision: UInt64
+    var transform: CanvasTransform
 
     func makeNSView(context: Context) -> CanvasEventView {
         CanvasEventView(viewModel: viewModel)
     }
 
     func updateNSView(_ nsView: CanvasEventView, context: Context) {
+        nsView.syncTextEditing()
         nsView.window?.invalidateCursorRects(for: nsView)
     }
 }

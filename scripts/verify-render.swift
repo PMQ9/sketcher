@@ -222,6 +222,39 @@ if let r = load("offcanvas.png") {
 }
 
 // ---------------------------------------------------------------------------
+// text.png — a bold word rendered through the export pipeline.
+// ---------------------------------------------------------------------------
+
+print("text.png")
+if let r = load("text.png") {
+    check("export is exactly 320x140", r.width == 320 && r.height == 140,
+          "got \(r.width)x\(r.height)")
+
+    // (a) Glyphs produce real dark ink — text is NOT a screen-only overlay. A
+    //     bold word at 72px inks thousands of pixels; a "renders nothing"
+    //     regression collapses this to ~0.
+    let darkInk = r.count { $0.r < 80 && $0.g < 80 && $0.b < 80 && $0.a == 255 }
+    check("glyphs are inked through the export pipeline",
+          darkInk > 400 && darkInk < 20000, "got \(darkInk)")
+
+    // (b) The glyphs sit within their box, not smeared across the canvas: the
+    //     bottom-right corner (well past a left-aligned two-letter word) is the
+    //     white background.
+    let corner = r.pixel(305, 130)
+    check("background beyond the text is white",
+          near(corner.r, 255) && near(corner.g, 255) && near(corner.b, 255),
+          "got \(corner)")
+
+    // (c) Ink actually lands in the glyph band (origin y=30, ~72px tall), which
+    //     a wrong y-flip in the CoreText draw would move off-canvas.
+    var inkedRows = 0
+    for y in 30...100 where (0..<r.width).contains(where: {
+        let p = r.pixel($0, y); return p.r < 80 && p.a == 255
+    }) { inkedRows += 1 }
+    check("the glyph band carries ink", inkedRows > 20, "got \(inkedRows) inked rows")
+}
+
+// ---------------------------------------------------------------------------
 
 print("")
 if failures == 0 {

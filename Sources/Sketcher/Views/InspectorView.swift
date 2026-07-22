@@ -15,6 +15,7 @@ struct InspectorView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header
+                if viewModel.hasEditableText { textSection }
                 fillSection
                 strokeSection
                 if viewModel.inspectorHasRect { cornerSection }
@@ -63,6 +64,52 @@ struct InspectorView: View {
             .labelsHidden()
             .controlSize(.small)
         }
+    }
+
+    /// Text controls: size, weight/slant/underline, alignment, line height, and
+    /// the legibility plate. Shown whenever text is being edited or selected.
+    private var textSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Text").font(.caption).foregroundStyle(.secondary)
+
+            slider("Font Size", value: fontSize, range: 6...400,
+                   display: "\(Int(fontSizeDisplayPt.rounded())) pt", name: "Font Size")
+
+            HStack(spacing: 4) {
+                styleToggle("bold", isOn: currentBold) { viewModel.toggleTextBold() }
+                styleToggle("italic", isOn: currentItalic) { viewModel.toggleTextItalic() }
+                styleToggle("underline", isOn: currentUnderline) { viewModel.toggleTextUnderline() }
+                Spacer()
+            }
+
+            Picker("Text Alignment", selection: textAlignment) {
+                Image(systemName: "text.alignleft").tag(TextAlignment.left)
+                Image(systemName: "text.aligncenter").tag(TextAlignment.center)
+                Image(systemName: "text.alignright").tag(TextAlignment.right)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .controlSize(.small)
+
+            slider("Line Height", value: lineHeight, range: 0.8...3.0,
+                   display: String(format: "%.1f\u{00D7}", currentLineHeight), name: "Line Height")
+
+            Toggle("Legibility Plate", isOn: plateEnabled)
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .font(.caption)
+        }
+    }
+
+    private func styleToggle(_ symbol: String, isOn: Bool,
+                             action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol).frame(width: 26, height: 20)
+        }
+        .buttonStyle(.plain)
+        .background(RoundedRectangle(cornerRadius: 4)
+            .fill(isOn ? Color(nsColor: .controlAccentColor).opacity(0.22) : .clear))
+        .foregroundStyle(isOn ? Color(nsColor: .controlAccentColor) : Color.primary)
     }
 
     private var cornerSection: some View {
@@ -123,5 +170,40 @@ struct InspectorView: View {
     private var dash: Binding<DashStyle> {
         Binding(get: { viewModel.inspectorStyle.dash },
                 set: { viewModel.setDash($0) })
+    }
+
+    // MARK: - Text bindings
+
+    /// The text object being edited or selected, whose attributes drive display.
+    private var textPayload: TextPayload? { viewModel.representativeTextPayload }
+
+    private var currentBold: Bool { textPayload?.isBold ?? viewModel.textBold }
+    private var currentItalic: Bool { textPayload?.isItalic ?? viewModel.textItalic }
+    private var currentUnderline: Bool { textPayload?.isUnderlined ?? viewModel.textUnderlined }
+    private var currentLineHeight: CGFloat {
+        textPayload?.lineHeightMultiple ?? viewModel.textLineHeightMultiple
+    }
+    private var fontSizeDisplayPt: CGFloat {
+        (textPayload?.fontSizePx ?? viewModel.textFontSizePx) / ppp
+    }
+
+    private var fontSize: Binding<Double> {
+        Binding(get: { Double(fontSizeDisplayPt) },
+                set: { viewModel.setTextFontSize(viewModel.scene.canvas.px(fromPoints: CGFloat($0))) })
+    }
+
+    private var lineHeight: Binding<Double> {
+        Binding(get: { Double(currentLineHeight) },
+                set: { viewModel.setTextLineHeight(CGFloat($0)) })
+    }
+
+    private var textAlignment: Binding<TextAlignment> {
+        Binding(get: { textPayload?.alignment ?? viewModel.textAlignment },
+                set: { viewModel.setTextAlignment($0) })
+    }
+
+    private var plateEnabled: Binding<Bool> {
+        Binding(get: { textPayload?.plateColor != nil },
+                set: { _ in viewModel.toggleTextPlate() })
     }
 }
