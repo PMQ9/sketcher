@@ -17,8 +17,13 @@ enum Interaction: Equatable {
     case polyDrafting(kind: PolyKind, points: [CGPoint], preview: CGPoint)
 
     case draggingObjects(ids: Set<UUID>, last: CGPoint, didDuplicate: Bool)
-    case resizing(handle: Handle, originals: [UUID: DrawObject], anchor: CGPoint)
-    case rotating(originals: [UUID: DrawObject], center: CGPoint)
+    /// `fixed` is the world-space anchor the resize pivots on (informational for
+    /// a single object, which recomputes its own anchor). `originals` are the
+    /// pre-gesture objects, so every frame recomputes from them with no drift.
+    case resizing(handle: Handle, originals: [UUID: DrawObject], fixed: CGPoint)
+    /// `startAngle` is the pointer's angle about `center` at grab time, so the
+    /// applied delta is measured from the grab, not from the shape's own axis.
+    case rotating(originals: [UUID: DrawObject], center: CGPoint, startAngle: CGFloat)
 
     case editingText(id: UUID)
 
@@ -54,7 +59,7 @@ enum Interaction: Equatable {
     var liveObjectIDs: Set<UUID> {
         switch self {
         case .draggingObjects(let ids, _, _): return ids
-        case .resizing(_, let originals, _), .rotating(let originals, _):
+        case .resizing(_, let originals, _), .rotating(let originals, _, _):
             return Set(originals.keys)
         case .editingText(let id): return [id]
         default: return []
