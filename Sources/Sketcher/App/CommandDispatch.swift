@@ -10,18 +10,33 @@ enum CommandDispatch {
         case .redo: viewModel.redo()
         case .cut: viewModel.cut()
         case .copy:
-            // Context-sensitive, like every editor: copy the selected objects
-            // when there is a selection, else copy the whole canvas as an image.
+            // Context-sensitive, like every editor: selected objects, else the
+            // pixel region, else the whole canvas as an image.
             if viewModel.selection.hasObjects { viewModel.copySelection() }
+            else if viewModel.selection.hasRegion { viewModel.copyPixelSelection() }
             else { ExportCommands.copyCanvas(viewModel) }
         case .paste: viewModel.paste()
         case .pasteInPlace: viewModel.pasteInPlace()
         case .duplicate: viewModel.duplicateSelection()
         case .delete: viewModel.deleteSelection()
-        case .selectAll: viewModel.selectAll()
+        case .selectAll:
+            // Context-sensitive, one keystroke apart: a pixel tool selects the
+            // whole canvas region; every other tool selects all objects.
+            if [.marquee, .lasso, .wand, .bucket].contains(viewModel.tool) {
+                viewModel.selectAllPixels()
+            } else {
+                viewModel.selectAll()
+            }
         case .deselect: viewModel.escape()
         case .exportImage:
             ExportCommands.exportImage(viewModel, in: NSApp.keyWindow)
+
+        case .invertSelection: viewModel.invertSelection()
+        case .growSelection: viewModel.growSelection()
+        case .shrinkSelection: viewModel.shrinkSelection()
+        case .featherSelection: viewModel.featherSelection()
+        case .fillWithPrimary: viewModel.fillSelection(with: viewModel.primaryColor)
+        case .fillWithSecondary: viewModel.fillSelection(with: viewModel.secondaryColor)
 
         case .bringForward: viewModel.bringForward()
         case .sendBackward: viewModel.sendBackward()
@@ -52,6 +67,10 @@ enum CommandDispatch {
         case .toolZoom: viewModel.tool = .zoom
         case .toolEyedropper: viewModel.tool = .eyedropper
         case .toolRedact: viewModel.tool = .redact
+        case .toolMarquee: viewModel.tool = .marquee
+        case .toolLasso: viewModel.tool = .lasso
+        case .toolWand: viewModel.tool = .wand
+        case .toolBucket: viewModel.tool = .bucket
 
         case .swapColors: viewModel.swapColors()
         case .resetColors: viewModel.resetColors()
@@ -102,9 +121,14 @@ enum CommandDispatch {
         switch command {
         case .undo: return viewModel.canUndo || viewModel.isGestureInFlight
         case .redo: return viewModel.canRedo
-        case .cut, .duplicate, .delete: return viewModel.selection.hasObjects
-        case .paste, .pasteInPlace: return ObjectClipboard.hasObjects
+        case .duplicate: return viewModel.selection.hasObjects
+        case .cut, .delete:
+            return viewModel.selection.hasObjects || viewModel.selection.hasRegion
+        case .paste, .pasteInPlace: return ObjectClipboard.hasObjects || ObjectClipboard.hasImage
         case .deselect: return !viewModel.selection.isEmpty
+        case .invertSelection, .growSelection, .shrinkSelection, .featherSelection,
+             .fillWithPrimary, .fillWithSecondary:
+            return viewModel.selection.hasRegion
         case .bringForward, .sendBackward, .bringToFront, .sendToBack,
              .ungroup, .toggleLock, .toggleHidden:
             return viewModel.selection.hasObjects

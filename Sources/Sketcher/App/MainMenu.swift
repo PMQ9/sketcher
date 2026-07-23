@@ -10,6 +10,7 @@ enum MainMenu {
         main.addItem(submenu: appMenu(appName: appName), title: appName)
         main.addItem(submenu: fileMenu(), title: "File")
         main.addItem(submenu: editMenu(), title: "Edit")
+        main.addItem(submenu: selectMenu(), title: "Select")
         main.addItem(submenu: arrangeMenu(), title: "Arrange")
         main.addItem(submenu: toolsMenu(), title: "Tools")
         main.addItem(submenu: layerMenu(), title: "Layer")
@@ -81,9 +82,28 @@ enum MainMenu {
         menu.addCommand(.pasteInPlace)
         menu.addCommand(.duplicate)
         menu.addItem(.separator())
-        menu.addCommand(.selectAll)
-        menu.addCommand(.deselect)
         menu.addCommand(.delete)
+        return menu
+    }
+
+    private static func selectMenu() -> NSMenu {
+        let menu = NSMenu(title: "Select")
+        // Select All is context-sensitive (objects, or the whole canvas region
+        // under a pixel tool); Deselect (Esc) is bound in CanvasEventView.
+        menu.addCommand(.selectAll)
+        let deselect = menu.addCommand(.deselect); deselect.title = "Deselect  (\u{238B})"
+        menu.addCommand(.invertSelection)
+        menu.addItem(.separator())
+        menu.addCommand(.growSelection)
+        menu.addCommand(.shrinkSelection)
+        menu.addCommand(.featherSelection)
+        menu.addItem(.separator())
+        // The delete-key fill combos are bound in CanvasEventView (a ⌫ menu key
+        // equivalent would fire in a text field), so the titles carry the hint.
+        let primary = menu.addCommand(.fillWithPrimary)
+        primary.title = "Fill with Primary Color  (\u{2325}\u{232B})"
+        let secondary = menu.addCommand(.fillWithSecondary)
+        secondary.title = "Fill with Secondary Color  (\u{2318}\u{232B})"
         return menu
     }
 
@@ -119,7 +139,8 @@ enum MainMenu {
             (.toolRectangle, .rectangle), (.toolEllipse, .ellipse),
             (.toolLine, .line), (.toolArrow, .arrow), (.toolPolygon, .polygon),
             (.toolRedact, .redact), (.toolEyedropper, .eyedropper),
-            (.toolHand, .hand), (.toolZoom, .zoom)
+            (.toolMarquee, .marquee), (.toolLasso, .lasso), (.toolWand, .wand),
+            (.toolBucket, .bucket), (.toolHand, .hand), (.toolZoom, .zoom)
         ]
         for (command, tool) in tools {
             let item = menu.addCommand(command)

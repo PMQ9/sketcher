@@ -15,28 +15,29 @@ tools + Excalidraw-class vector editing) on a blank light/dark/transparent canva
 Swift 6 + SwiftUI + CoreGraphics/CoreImage, **zero third-party deps, no Xcode
 project**. Built in numbered milestones (M1–M8 = v1); each milestone stays runnable.
 
-**Where it stands (2026-07-22):** M1 done, **M2 ~90% done**, **M3 core complete**
+**Where it stands (2026-07-23):** M1 done, **M2 ~90% done**, **M3 core complete**
 (shapes, multi-select, handles, clipboard, arrange), **M4 core complete** (color
 system, eyedropper, blur/pixelate redaction, style inspector), **M5 core complete**
 (multiline text), **M6 core complete** (raster layers + `SurfaceStore` carrying
-real pixels, a perfect-freehand brush engine with six presets and a 1€ stabilizer,
-three eraser modes, a layers panel, and **tile-quantized raster undo proven under
-budget — T1 answered**). The app builds warning-clean, launches to a blank canvas
-you can draw on, and has **139 unit tests + 25 pixel assertions all green**. The
-single biggest open question — can SwiftUI `Canvas` hold frame rate — has been
-**answered and resolved** (§7): the render cache is mandatory and it works. The
-second — can raster undo stay under budget — is now **answered too** (§1 M6, the
-T1 memory test). Nothing is blocked.
+real pixels, a perfect-freehand brush engine, three eraser modes, a layers panel,
+tile-quantized raster undo — **T1 answered**), **M7 core complete** (regions:
+marquee / lasso / wand with the five combine modes, animated marching ants, the
+lift → move → drop floating-selection as ONE undo entry, cut/copy/paste, fill
+selection, grow / shrink / feather / invert, and the bucket — **Risk 2 spike
+passed, T2/T3 implemented**). The app builds warning-clean, launches to a blank
+canvas you can draw on, and has **164 unit tests + 25 pixel assertions all green**.
+The two biggest open questions — can SwiftUI `Canvas` hold frame rate (§7) and can
+raster undo stay under budget (§1 M6) — are both **answered**. Nothing is blocked.
 
-**M1–M6 are committed** on `main`; the working tree is clean. Next work is
-**M7 (regions: select, move, copy, paste, bucket, wand)** — the floating-selection
-subsystem. Commit when the user asks (don't commit unprompted).
+**M1–M7 are committed** on `main`; the working tree is clean. Next work is
+**M8 (persistence package, canvas ops, export formats) — v1 ships at M8.** Commit
+when the user asks (don't commit unprompted).
 
 ### Resume in 60 seconds
 
 ```sh
 cd /Users/phamqm/Projects/sketcher
-make test      # 139 tests — must be green before you touch anything
+make test      # 164 tests — must be green before you touch anything
 make verify    # 25 pixel assertions through the real export pipeline
 make run       # launches dist/Sketcher.app — draw a stroke to sanity-check
 .build/release/Sketcher --perf   # re-run the perf gate if you touch rendering
@@ -45,18 +46,34 @@ make run       # launches dist/Sketcher.app — draw a stroke to sanity-check
 Read order for a new agent: this section → §8 (file map) → `CLAUDE.md` (the 15
 invariants) → §2 (decisions) → §3/§4 (traps + bugs) before editing.
 
-### What to do next (M7, plus small tails)
+### What to do next (M8, plus small tails)
 
-**M3–M6 core are done** (see their subsections in §1). Next milestone is
-**M7 — regions: select, move, copy, paste, bucket, wand**: the floating-selection
-subsystem (lift → transform → drop as one undo entry), rect/ellipse/lasso/wand
-with the five combine modes, animated marching ants (hand-written marching squares
-for wand masks — T3), raster flood fill, and Rasterize Selection. **Spike the
-`CGPath`-boolean figure-eight case in week one** (Risk 2) before the architecture
-commits. `SurfaceStore` + the `RasterPatch` lifecycle from M6 are the foundation it
-builds on, and `commitRasterMutation` is the pattern flood-fill/lift reuse.
+**M3–M7 core are done** (see their subsections in §1). Next milestone is
+**M8 — persistence package, canvas ops, export formats — v1 ships here**: the
+`.sketcher` file package (surfaces as content-addressed PNGs — the M6/M7
+`SurfaceStore` now carries real pixels, so this is the milestone that must
+persist them; flip `Info.plist` to `LSTypeIsPackage`, D16), New Canvas sheet,
+Canvas Size (9-way anchor, no resample) vs Image Size (resample), Crop / Crop to
+Selection / Trim to Content, Rotate 90 / flip, PDF + HEIC export, Print. The M7
+region mask is what Crop to Selection snaps to.
 
-**Small tails to mop up when convenient:**
+**M7 tails to mop up when convenient** (none blocking):
+- **Floating SCALE / ROTATE / FLIP handles** — only MOVE is wired. `FloatingPixels`
+  already carries a live `CGAffineTransform`, so the drop/preview honor any
+  transform; what's missing is the handle UI + gesture that writes scale/rotation
+  into it. Flip H/V is M8's Arrange menu anyway (D43).
+- **Polygonal lasso** (Shift+Q) deferred — freehand lasso (Q) only. Reuses the
+  existing `.polyDrafting` state when built.
+- **Rasterize Selection, Copy Merged (⌘⇧C), Stroke Selection** deferred.
+- **⌘I stays Italic**, not Invert Selection — a menu key-equivalent clash the plan
+  didn't foresee. Invert / Grow / Shrink / Feather are menu-only; grow/shrink step
+  a fixed 3 pt, feather 4 pt (no slider UI). Wand tolerance is a fixed 0.12 with a
+  horizontal drag-adjust (Procreate feel), no slider (D45).
+- **Pixel tools need an active raster layer** to lift / fill / clear; on a vector
+  layer they no-op (run Rasterize Layer first — D45, consistent with the D38 eraser
+  fallback). Selection CREATION works on any layer.
+
+**Earlier small tails to mop up when convenient:**
 - **M6 tails** (none blocking): the pixel eraser targets the active raster layer;
   on a vector layer it FALLS BACK to object-erase rather than prompting
   "Rasterize?" (D38 — no modal, but you must Rasterize Layer explicitly to paint
@@ -112,7 +129,7 @@ Legend: ☐ not started · ◐ in progress · ☑ done & verified
 | M4 | Color system, style inspector, blur redaction | ◐ | 89 tests; core done, tails below |
 | M5 | Multiline text | ◐ | 108 tests + text pixel fixture; core done, tails below |
 | M6 | Raster layers, brush engine, erasers, layers panel, raster undo | ◐ | 139 tests (T1 memory proven); core done, tails below |
-| M7 | Regions: select, move, copy, paste, bucket, wand | ☐ | |
+| M7 | Regions: select, move, copy, paste, bucket, wand | ◐ | 164 tests (Risk-2 spike, T2/T3, one-entry move); core done, tails above |
 | M8 | Persistence, canvas ops, export formats — **v1 ships here** | ☐ | |
 | M9–M11 | Appendix: filters, gradients, snapping, polish | ☐ | decided after M8 |
 
@@ -318,6 +335,61 @@ falls back to object-erase (no "Rasterize?" modal — D38); `streamline` bakes i
 stored samples (D34); no layer thumbnails, reorder is buttons not drag; calligraphy
 is a faked nib (D35).
 
+### M7 — core complete (2026-07-23)
+
+Delivered and tested (25 new tests: `SelectionRegionTests.swift`,
+`FloatingSelectionTests.swift`). **The Risk-2 spike ran first** (figure-eight
+`CGPath` booleans + `clip(to:mask:)` on an 8-bit gray mask) and passed on this
+SDK — recorded as `figureEightFillsBothLobes` and `clipMatchesRasterOrientation`,
+so the architecture below is validated, not assumed.
+
+- [x] **Region creation** (`Raster/MaskOps.swift`, `Model/Selection.swift`):
+  rectangular / elliptical marquee (`M` / Shift+M), freehand lasso (`Q`), magic
+  wand (`W`) and Select Similar (Shift+W). The five combine modes from the held
+  modifiers (Shift union, Option subtract, Shift+Option intersect, plain replace,
+  `CombineMode`). Analytic shapes combine via native `CGPath` booleans into a
+  value-typed `.compound(PathGeometry)`; anything mask-backed combines per-pixel
+  into a `.mask` (D40).
+- [x] **The wand + bucket share ONE flood fill** (`Raster/FloodFill.swift`, D42):
+  a scanline span fill with an explicit stack (never recursion), comparing
+  UN-premultiplied RGBA (invariant 10, transparent-matches-transparent for free).
+  The bucket paints a color through the returned region; the wand adopts it as a
+  selection. `contiguous:false` is Select Similar. Asserted identical by
+  `wandAndBucketShareFloodFill`; leak-free on an AA circle by `fillInsideCircleNoLeak`.
+- [x] **Animated marching ants** (`Rendering/MarchingAnts.swift`, `CanvasView`):
+  a path region strokes its own decomposed outline; a **mask region is traced by
+  hand-written marching squares + Douglas–Peucker** (`Raster/MaskTrace.swift`,
+  T3 — there is no system mask→`CGPath` API). Two strokes (white under an animated
+  black dash) on a `TimelineView` overlay so the main content Canvas is not re-run
+  each tick; honors Reduce Motion; the trace is cached so it runs only on a region
+  change, not every frame.
+- [x] **Lift → move → drop = ONE undo entry** (`EditorViewModel` extension, D43):
+  dragging inside the selection lifts its pixels off the active raster layer into
+  `selection.floating` (a live `CGAffineTransform` over the original crop). The
+  source layer's surface is swapped to a cleared copy **without** a history push;
+  the drop composites float-over-cleared and pushes a single before→after
+  `RasterPatch` (pre-lift → result). Return / tool-change / click-away commit; Esc
+  commits (deselect keeps the move); ⌘Z abandons (restores the source). Proven by
+  `moveIsOneUndoEntry` (source cleared, destination holds the pixels, undo restores)
+  and `undoMidFloatRestores`.
+- [x] **Cut / copy / paste / fill / delete**: copy writes the composite within the
+  region as PNG + TIFF; **paste is an `.image` object** (D22 fulfilled — D44),
+  selectable and movable with `V`, one entry. Fill Selection (Opt+Delete primary /
+  Cmd+Delete secondary) and Delete clip a raster mutation through the region.
+- [x] **Grow / shrink / feather / invert** (`MaskOps`, one CIFilter each —
+  `CIMorphologyMaximum` / `Minimum` / `CIGaussianBlur` — plus a per-pixel invert).
+  Select All is context-sensitive (objects, or the whole-canvas region under a
+  pixel tool). A new **Select** menu; the region tools joined the toolbar + Tools
+  menu.
+- [x] **Bucket** (`applyBucket`, D45): clicking a closed shape's INTERIOR sets its
+  fill (resolution-independent, non-destructive — the DEFAULT); elsewhere it flood
+  fills the active raster layer through the shared `FloodFill.region`.
+
+Tails (none blocking, in §0's "what to do next"): floating scale/rotate/flip
+handles (MOVE only — the transform is there, the handle UI is the tail); polygonal
+lasso; Rasterize Selection / Copy Merged / Stroke Selection; ⌘I stays Italic so
+Invert is menu-only; pixel tools need an active raster layer (D45).
+
 ---
 
 ## 2. Technical design decisions
@@ -366,6 +438,13 @@ this list rather than quietly reversing an entry.
 | D37 | **A pixel edit is a `RasterPatch` (tile diff), NOT a `.scene` snapshot** | Setting a layer's `SurfaceID` to a new full surface DOES change `Scene`, so `history.end` would push a `.scene` entry — but that entry's surface must be retained, so 50 raster strokes would pin 50 full canvases (~800 MB). The eraser therefore opens NO gesture bracket; `commitRasterMutation` pushes a `RasterPatch` of materialized tile crops instead, and `pruneSurfaces` drops the superseded full surface. This is the whole reason `HistoryEntry` is heterogeneous. |
 | D38 | **Pixel erase on a vector layer falls back to object-erase; it does NOT prompt "Rasterize layer?"** | The plan's routing table says prompt, but "lightweight = no modal dialogs" (Risk 7) wins. The eraser always does something sensible (delete the objects it sweeps); to paint pixels on a vector layer you run **Rasterize Layer** explicitly first. Keeps the eraser non-blocking and the seam predictable. |
 | D39 | **Rasterize / merge / flatten build a throwaway `Scene` (transparent background) and draw it through `SceneRenderer`** | Reuses the ONE renderer (invariant 2) instead of a second bake path, so a rasterized layer is pixel-identical to its live look. The canvas background is a canvas property, not a layer, so it is deliberately NOT baked in — a transparent-canvas doc stays transparent after Flatten. Off-page content is clipped, because a surface is exactly page-sized (answers the M6 open question below). |
+| D40 | **Analytic selections combine via `CGPath` booleans → `.compound(PathGeometry)`; only mask-backed regions rasterize** | The Risk-2 spike proved `CGPath` `union`/`subtracting`/`intersection` are reliable on this SDK even for a self-intersecting figure-eight lasso, under both fill rules. So rect/ellipse/polygon/compound stay exact and resolution-independent (no trace, cheap ants); the wand and any mask-involving combine go to full-page 8-bit gray masks. Booleans are always run winding and the decomposition preserves subpath direction, so a subtract's oppositely-wound holes survive the winding refill. |
+| D41 | **Masks are full-page 8-bit DeviceGray, data row 0 = canvas top; `clip(to:mask:)` gets ONE compensating vertical flip, centralized in `MaskOps.clip`** | `rasterize` / `readGray` / `MaskTrace` all share the row-0-is-top convention every surface uses. But `clip(to:mask:)` in a y-down context maps the mask like `draw` does (row 0 → the bottom), so it needs a single vertical flip to align — done once in `MaskOps.clip`, never re-derived at call sites. Asserted end-to-end by `clipMatchesRasterOrientation`. `alphaInfo .none`, never alphaOnly (T2). |
+| D42 | **The wand and bucket call ONE `FloodFill.region`** | Computing "similar pixels" twice would let their tolerance drift apart, which users notice instantly. The shared function returns the connected (or, non-contiguous, global) region as a gray mask; the bucket paints through it, the wand adopts it. Comparison is on UN-premultiplied RGBA (invariant 10). Explicit-stack scanline span fill, never recursion (a full-canvas fill would blow the stack). |
+| D43 | **Lift → move → drop is ONE undo entry via a no-history surface swap + a single `RasterPatch`** | The float is view-model state (a live transform over the original crop), drawn as an overlay with the SAME draw `compositeFloat` bakes — so preview == result. Lift swaps the source layer to a cleared copy WITHOUT pushing history (the original is stashed in `floatingOrigin`); the drop pushes one before→after patch from pre-lift → (cleared + composited). This is why a move is one entry, not two. Return / tool-change / click-away commit; Esc commits (deselecting keeps the move); ⌘Z abandons (restores the source). |
+| D44 | **Paste is an `.image` object, not a pixel float** | Fulfills D22's deferral now that the `SurfaceStore` lifecycle across undo/redo exists. An external image (or a pixel selection's PNG copy) pastes as a selectable/movable `.image` object on the nearest vector layer — one entry, reuses all of M3's object infrastructure, no raster-layer requirement. Reserving the pixel FLOAT for the in-canvas lift keeps the two paths simple. |
+| D45 | **Bucket defaults to vector (set a closed shape's fill), falls through to raster flood fill; pixel tools require an active raster layer** | Clicking a closed shape's INTERIOR sets its fill — resolution-independent and non-destructive, the plan's default bucket. Elsewhere it floods the active raster layer. Fill / clear / lift all target the active raster layer; on a vector layer they no-op (run Rasterize Layer first), consistent with the D38 eraser fallback and "lightweight = no modal dialogs" (Risk 7). Selection CREATION works on any layer. |
+| D46 | **Selection-owned surfaces join the prune keep-set** | A wand mask, a lifted float, and the in-flight combine base live in `SurfaceStore` but are referenced by neither `Scene` nor `History`. `pruneSurfaces` therefore unions `selection.referencedSurfaceIDs` and the gesture's combine base, or a live mask would be collected out from under the user (a Shift+wand drag re-flooding each frame is the sharp case). |
 
 ### Rejected, with reasons
 
@@ -390,8 +469,8 @@ a test that catches it; if you touch the area, keep the test.
 | # | Trap | Symptom | Fix |
 | --- | --- | --- | --- |
 | T1 | `CGImage.cropping(to:)` does **not** copy pixels — the header states it retains the original | 50 undo patches silently pin 2.3 GB. **Invisible until you profile.** | Materialize patches into fresh bitmap contexts. Test: `SurfaceStore.totalBytes` after 50 strokes. |
-| T2 | `CGContext.clip(to:mask:)` **rejects alpha-only images** | Magic-wand selection silently does nothing, or inverts | Masks are 8-bit **DeviceGray, `alphaInfo .none`**, polarity 255 = selected. |
-| T3 | No system API converts a bitmap mask to a `CGPath` | Wand marching-ants impossible by the obvious route | Hand-written marching squares + Douglas–Peucker (~200–400 LOC, M7). |
+| T2 | `CGContext.clip(to:mask:)` **rejects alpha-only images**, AND maps a mask like `draw` (row 0 → bottom) in a y-down context | Magic-wand clip silently does nothing, or clips the vertically-mirrored region | **M7:** masks are 8-bit **DeviceGray, `alphaInfo .none`**, polarity 255 = selected; `MaskOps.clip` adds ONE compensating flip, centralized (D41). Asserted by `clipMatchesRasterOrientation`. |
+| T3 | No system API converts a bitmap mask to a `CGPath` | Wand marching-ants impossible by the obvious route | **M7:** hand-written marching squares (unit boundary edges → stitched loops) + Douglas–Peucker in `Raster/MaskTrace.swift`; cached so it runs on a region change, not every animation frame. |
 | T4 | `Testing.framework` ships outside default search paths (CLT-only machines) | `swift test` → `no such module 'Testing'`; or it builds and the binary dies at launch | `make test` injects `-F` plus **two** rpaths. Never run bare `swift test`. |
 | T5 | Swift's `Hasher` is per-process seeded | `hashValue`-derived filenames or RNG seeds change every launch; renders become non-reproducible | `CryptoKit.SHA256` for content addressing, UUID raw bytes for RNG seeds. |
 | T6 | Tablet pressure: checking only `event.type` misses most drivers | Pressure reads 1.0 forever; strokes never taper | Check `e.subtype == .tabletPoint \|\| e.type == .tabletPoint`. |
@@ -519,7 +598,7 @@ path (the common case) costs as much as the render it was meant to avoid.
 
 ## 8. Architecture / file map
 
-58 source files, ~9.6k lines; 9 test files, ~2.5k lines. Layered strictly:
+62 source files, ~11k lines; 11 test files, ~2.9k lines. Layered strictly:
 **Model → Rendering → ViewModel → Input/Views/App**. The dependency arrow never
 points backwards — Model knows nothing of AppKit, and nothing below the view
 layer knows about points or zoom (invariant 1).
@@ -537,7 +616,7 @@ layer knows about points or zoom (invariant 1).
 | `Shapes/ShapeLibrary.swift` | **(M3)** 20-entry polygon/star catalog (one data table) driving the toolbar shape picker; every entry maps onto the `polygon` kind. |
 | `CanvasTransform.swift` | **The ONLY pixel↔view conversion site** (invariant 1). `toView`/`toCanvas`/`canvasTolerance`/`zoom(by:about:)`/`fit`/`actualSize`. |
 | `ObjectStyle.swift` | `ObjectStyle`, `RGBAColor`, `Fill`, `DashStyle`, `ShadowSpec`. |
-| `Selection.swift` | `Selection` (multi-select `Set<UUID>` + pixel region), `SelectionShape`, `FloatingPixels`, `LiftMode`. **Object multi-select wired (M3); pixel region ops are M7.** |
+| `Selection.swift` | `Selection` (multi-select `Set<UUID>` + pixel region + floating), `SelectionShape` (rect/ellipse/polygon/**`.compound(PathGeometry)`**/mask), `CombineMode`, `FloatingPixels`, `LiftMode`, `Selection.referencedSurfaceIDs`. **Object multi-select (M3); pixel regions + float (M7).** |
 | `SurfaceStore.swift` | Lock-guarded `@unchecked Sendable` refcounted CGImage table. **Carries live raster pixels from M6.** `totalBytes` is the memory-budget probe (T1); `prune(keeping:)` GCs by scene+history reference, not refcount. |
 | `PixelFormat.swift` | The one canonical pixel layout (BGRA premultiplied) + `makeContext` (handled-failure allocation) + `unpremultiply`. |
 | `Tool.swift` | `Tool` enum + display names, SF Symbols, drag-behavior flags. |
@@ -557,16 +636,20 @@ layer knows about points or zoom (invariant 1).
 | `CIContextProvider.swift` | **(M4)** One shared `CIContext` (linear working space) for every filter — never one per application. |
 | `Redaction.swift` | **(M4)** Renders a region, blurs/pixelates it (halo-safe clamp+crop, anchored pixelate center), returns the opaque patch. |
 | `PixelSampling.swift` | **(M4)** `CGImage.firstPixelUnpremultiplied` — the eyedropper's readback (invariant 10). |
+| `MarchingAnts.swift` | **(M7)** A selection's ant geometry (canvas px): a path region decomposes its own outline, a mask region traces via `MaskTrace`, a float outlines its transformed source rect. Color + animation live in the SwiftUI overlay, never here. |
 
 ### Raster — nonisolated (`Sources/Sketcher/Raster/`)
 | File | Purpose |
 | --- | --- |
 | `RasterOps.swift` | **(M6)** The pixel-op free functions (invariant 11): `rasterizeContent`/`flatten` (through the ONE renderer, D39), `erase` (`.clear`, T15), `blank`, `materialize` (fresh-context tile crop — the T1 fix, NEVER `cropping(to:)`), `compositeTile` (apply a patch tile). Every result is a new immutable surface. |
+| `MaskOps.swift` | **(M7)** Selection-mask algebra: `rasterize` a region → full-page 8-bit gray mask, `combine` (analytic → `CGPath` boolean → `.compound`; mask-backed → per-pixel), `morphology`/`feather`/`invert`, `nonEmptyBounds`, and **`clip` — the ONE selection-clip site, owning the `clip(to:mask:)` orientation flip (D41)**. `CGPath.selectionGeometry()` flattens a boolean result to a `PathGeometry`. |
+| `FloodFill.swift` | **(M7)** The ONE flood fill for the wand AND bucket (D42): explicit-stack scanline span fill, UN-premultiplied compare, transparent-matches-transparent, returns the region as a gray mask. `readBGRA` reads a source top-down. |
+| `MaskTrace.swift` | **(M7, T3)** Hand-written mask→contours: unit boundary edges wound per pixel, stitched into closed loops, simplified by Douglas–Peucker — the wand's marching ants (no system mask→`CGPath` API). |
 
 ### ViewModel — `@MainActor` (`Sources/Sketcher/ViewModel/`)
 | File | Purpose |
 | --- | --- |
-| `EditorViewModel.swift` | The hub. Owns `scene` (with the `sceneRevision` didSet), `history`, `interaction`, `selection`, `transform`, tool + style, the live `OneEuroFilter`. Pointer handlers, commit gating, undo/redo, viewport commands. **The M5 text-editing, M6 eraser (3 modes), M6 raster-patch, and M6 layer lifecycles** all live here as same-file extensions — they mutate the file-private `scene`/`interaction`/`history`/`surfaces` like redaction does. `applyRasterPatch` composites tile diffs on undo/redo (D37). |
+| `EditorViewModel.swift` | The hub. Owns `scene` (with the `sceneRevision` didSet), `history`, `interaction`, `selection`, `transform`, tool + style, the live `OneEuroFilter`. Pointer handlers, commit gating, undo/redo, viewport commands. **The M5 text-editing, M6 eraser (3 modes) / raster-patch / layer, and M7 region-selection + floating-pixels + bucket lifecycles** all live here as same-file extensions — they mutate the file-private `scene`/`interaction`/`history`/`surfaces` like redaction does. `applyRasterPatch` composites tile diffs on undo/redo (D37); a floating drop reuses `commitRasterMutation` for its single entry (D43). |
 | `Interaction.swift` | The editing state machine (`idle`/`drawing`/`draggingObjects`/`resizing`/`rotating`/`editingText`/`marquee`/`panning`). Pointer + key handlers are its transitions. `resizing`/`rotating` carry the pre-gesture originals (M3); `editingText` is a mutating gesture bracketing a whole text session (M5). |
 | `History.swift` | Snapshot undo. `begin`/`end` (push-only-if-changed), interactive-edit coalescing, `HistoryEntry` (scene \| rasterPatch), `RasterPatch` (materialized, tile-quantized — T1; **carries real pixels from M6**), byte-budget eviction (raster patches evict first, `.scene` never). |
 
@@ -623,16 +706,18 @@ layer knows about points or zoom (invariant 1).
 | `scripts/bundle.sh` | Hand-assembles `dist/Sketcher.app`, ad-hoc signs, `plutil -lint`. |
 | `scripts/Info.plist` | Bundle id, document type. Comment marks the M8 flip to `LSTypeIsPackage`. |
 | `scripts/verify-render.{sh,swift}` + `make-fixture.swift` | The pixel-fidelity harness (21 assertions) + its fixtures. |
-| `Tests/SketcherTests/` | `GeometryTests`, `HistoryTests` (+ `EditorViewModelTests`), `CodecTests`, `RenderCacheTests` (+ `ExportTests`), `SelectionArrangeTests` (M3), `ColorRedactionTests` (M4), `TextEditingTests` (M5), `BrushRasterTests` (M6: Freehand geometry, 1€ filter, brush presets), `RasterLayerTests` (M6: **T1 memory budget**, raster undo round-trip, layers, eraser modes, overlap-erase, opacity isolation). **139 tests.** |
+| `Tests/SketcherTests/` | `GeometryTests`, `HistoryTests` (+ `EditorViewModelTests`), `CodecTests`, `RenderCacheTests` (+ `ExportTests`), `SelectionArrangeTests` (M3), `ColorRedactionTests` (M4), `TextEditingTests` (M5), `BrushRasterTests` + `RasterLayerTests` (M6: **T1 memory budget**, raster undo, eraser modes, overlap-erase), `SelectionRegionTests` (M7: **the Risk-2 figure-eight spike**, mask orientation, combine, flood fill, mask trace, morphology), `FloatingSelectionTests` (M7: **one-entry move**, wand, fill, bucket, invert). **164 tests.** |
 
 ### Not yet created (planned, per milestone)
 `Model/Shapes/*` + `Grouping`/`HitTest`/`Handles` as separate files (M3 — currently
 inline) · `Tools/*` per-tool files (the tools live in `EditorViewModel` extensions) ·
-`Persistence/SceneFile`/`PackageIO` package format (M8) · `Model/{SelectionShape,
-FloatingPixels}` fleshed out + `Raster/{FloodFill,MaskTrace,MaskOps}` + `Rendering/
-MarchingAnts` (M7) · `Views/{CheckerboardView,ZoomControl}` (inline). The current
-layout collapses several planned files into fewer; that is tracked in §1 and is not
-a problem to fix, just a note so the plan's file list isn't taken literally. (M6's
-`Model/Brush/*` landed as three files as planned; `History+RasterPatch` folded into
-`EditorViewModel`/`History` for file-private access; `LayerCommands` is a pure
-`Scene` extension with the stateful half in the view model.)
+`Persistence/SceneFile`/`PackageIO` package format (M8) · `Views/{CheckerboardView,
+ZoomControl}` (inline). The current layout collapses several planned files into
+fewer; that is tracked in §1 and is not a problem to fix, just a note so the plan's
+file list isn't taken literally. (M6's `Model/Brush/*` landed as three files as
+planned; `History+RasterPatch` folded into `EditorViewModel`/`History` for
+file-private access. M7's `Raster/{FloodFill,MaskTrace,MaskOps}` + `Rendering/
+MarchingAnts` landed as planned; `SelectionShape`/`FloatingPixels` were already
+declared in `Selection.swift` from M1's scope pull-forward, so `.compound` +
+`CombineMode` were added there; `Tools/*` + `SelectionCommands` + the floating
+lifecycle live as `EditorViewModel` extensions for file-private access.)

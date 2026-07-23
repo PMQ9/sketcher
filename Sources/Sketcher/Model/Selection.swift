@@ -28,6 +28,21 @@ struct Selection: Equatable {
 
     var hasObjects: Bool { !objectIDs.isEmpty }
 
+    /// A pixel region is active (marquee/lasso/wand result), whether or not
+    /// pixels have been lifted off it yet.
+    var hasRegion: Bool { region != nil }
+
+    /// Surfaces this selection owns. They live in `SurfaceStore` but are
+    /// referenced by neither `Scene` nor `History`, so the prune keep-set must
+    /// include them or a wand mask / floating buffer is collected out from under
+    /// a live selection.
+    var referencedSurfaceIDs: Set<SurfaceID> {
+        var ids = Set<SurfaceID>()
+        if case .mask(let id, _)? = region { ids.insert(id) }
+        if let floating { ids.insert(floating.surface) }
+        return ids
+    }
+
     mutating func clear() {
         objectIDs.removeAll()
         editingGroupPath.removeAll()
@@ -54,17 +69,41 @@ enum SelectionShape: Equatable {
     case rect(CGRect)
     case ellipse(CGRect)
     case polygon(points: [CGPoint], evenOdd: Bool)
+    /// The result of combining two analytic shapes through a `CGPath` boolean
+    /// (union/subtract/intersect). Reuses the value-typed `PathGeometry` — the
+    /// booleans flatten curves to polylines, which is exactly what it stores —
+    /// so a combined selection stays exact and resolution-independent, with no
+    /// marching-squares trace needed for its ants (that is only for masks).
+    case compound(PathGeometry)
     /// Magic-wand output. The mask is 8-bit DeviceGray with
     /// `CGImageAlphaInfo.none` — NOT alphaOnly, which `CGContext.clip(to:mask:)`
-    /// rejects outright. Polarity: 255 = selected.
+    /// rejects outright. Polarity: 255 = selected. `bounds` is the tight
+    /// nonzero box, so the ants trace and any lift crop stay small.
     case mask(SurfaceID, bounds: CGRect)
 
     var bounds: CGRect {
         switch self {
         case .rect(let r), .ellipse(let r): return r
         case .polygon(let points, _): return CGRect(containing: points)
+        case .compound(let geometry): return geometry.bounds
         case .mask(_, let bounds): return bounds
         }
+    }
+
+    /// The fill rule the derived path must use. Self-intersecting lassos and
+    /// boolean results both need this carried, or a crossing reads as a hole.
+    var usesEvenOdd: Bool {
+        switch self {
+        case .polygon(_, let evenOdd): return evenOdd
+        case .compound(let geometry): return geometry.evenOdd
+        case .rect, .ellipse, .mask: return false
+        }
+    }
+
+    /// True when this region clips through an alpha mask rather than a path.
+    var isMask: Bool {
+        if case .mask = self { return true }
+        return false
     }
 
     /// nil for mask-backed selections, which clip through `clip(to:mask:)`
@@ -77,8 +116,26 @@ enum SelectionShape: Equatable {
             return CGPath(ellipseIn: r, transform: nil)
         case .polygon(let points, _):
             return ObjectPaths.polylinePath(points, closed: true)
+        case .compound(let geometry):
+            return geometry.isEmpty ? nil : geometry.makePath()
         case .mask:
             return nil
+        }
+    }
+}
+
+/// How a freshly-drawn region combines with the existing one — driven by the
+/// modifier keys held during the gesture (Shift union, Option subtract,
+/// Shift+Option intersect), matching Photoshop / Paint.NET.
+enum CombineMode: Equatable, Sendable {
+    case replace, union, subtract, intersect
+
+    init(shift: Bool, option: Bool) {
+        switch (shift, option) {
+        case (true, true): self = .intersect
+        case (true, false): self = .union
+        case (false, true): self = .subtract
+        case (false, false): self = .replace
         }
     }
 }

@@ -192,6 +192,28 @@ final class CanvasEventView: NSView {
             return
         }
 
+        // Delete / Fill Selection, resolved BEFORE the command guard so
+        // Cmd+Delete (fill secondary) and Opt+Delete (fill primary) are not
+        // swallowed by the menu. A bare Delete clears objects or region pixels.
+        if let character = event.charactersIgnoringModifiers?.first,
+           KeyMap.isDeleteKey(character) {
+            if event.modifierFlags.contains(.option) {
+                viewModel.fillSelection(with: viewModel.primaryColor)
+            } else if event.modifierFlags.contains(.command) {
+                viewModel.fillSelection(with: viewModel.secondaryColor)
+            } else {
+                viewModel.deleteSelection()
+            }
+            return
+        }
+
+        // Return / Enter drops a lifted floating selection.
+        if let character = event.charactersIgnoringModifiers?.first,
+           KeyMap.isReturn(character), viewModel.selection.floating != nil {
+            viewModel.commitFloating()
+            return
+        }
+
         // Let the menu bar own every Command combination: it has the key
         // equivalents, the validation, and the discoverability.
         guard !event.modifierFlags.contains(.command) else {
@@ -205,10 +227,6 @@ final class CanvasEventView: NSView {
             return
         }
 
-        if KeyMap.isDeleteKey(character) {
-            viewModel.deleteSelection()
-            return
-        }
         if KeyMap.isEscape(character) {
             viewModel.escape()
             return
@@ -246,6 +264,18 @@ final class CanvasEventView: NSView {
         case "j":
             viewModel.tool = .redact
             viewModel.redactStyle = shift ? .pixelate : .blur
+            window?.invalidateCursorRects(for: self)
+            return
+        case "m":
+            // Shift+M is the elliptical marquee; M the rectangular one.
+            viewModel.marqueeEllipse = shift
+            viewModel.tool = .marquee
+            window?.invalidateCursorRects(for: self)
+            return
+        case "w":
+            // Shift+W is Select Similar (every matching pixel, non-contiguous).
+            viewModel.wandContiguous = !shift
+            viewModel.tool = .wand
             window?.invalidateCursorRects(for: self)
             return
         default:

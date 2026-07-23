@@ -13,7 +13,8 @@ struct ToolbarView: View {
     /// Only tools that actually work are shown — the rest arrive with their
     /// milestones rather than as dead buttons.
     private static let availableTools: [Tool] = [
-        .select, .brush, .eraser, .rectangle, .ellipse, .line, .arrow, .polygon,
+        .select, .marquee, .lasso, .wand, .brush, .eraser, .bucket,
+        .rectangle, .ellipse, .line, .arrow, .polygon,
         .text, .redact, .eyedropper, .hand
     ]
 

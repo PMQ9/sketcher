@@ -13,6 +13,10 @@ enum Command: String, CaseIterable, Sendable {
     case delete, selectAll, deselect
     case exportImage
 
+    // Select (pixel regions)
+    case invertSelection, growSelection, shrinkSelection, featherSelection
+    case fillWithPrimary, fillWithSecondary
+
     // Arrange
     case bringForward, sendBackward, bringToFront, sendToBack
     case group, ungroup
@@ -24,6 +28,7 @@ enum Command: String, CaseIterable, Sendable {
     case toolSelect, toolBrush, toolEraser, toolRectangle, toolEllipse
     case toolLine, toolArrow, toolPolygon, toolHand, toolZoom
     case toolEyedropper, toolRedact
+    case toolMarquee, toolLasso, toolWand, toolBucket
 
     // Color
     case swapColors, resetColors, screenEyedropper
@@ -62,6 +67,12 @@ enum Command: String, CaseIterable, Sendable {
         case .selectAll: return "Select All"
         case .deselect: return "Deselect"
         case .exportImage: return "Export\u{2026}"
+        case .invertSelection: return "Invert Selection"
+        case .growSelection: return "Grow Selection"
+        case .shrinkSelection: return "Shrink Selection"
+        case .featherSelection: return "Feather Selection"
+        case .fillWithPrimary: return "Fill with Primary Color"
+        case .fillWithSecondary: return "Fill with Secondary Color"
         case .bringForward: return "Bring Forward"
         case .sendBackward: return "Send Backward"
         case .bringToFront: return "Bring to Front"
@@ -90,6 +101,10 @@ enum Command: String, CaseIterable, Sendable {
         case .toolZoom: return "Zoom"
         case .toolEyedropper: return "Eyedropper"
         case .toolRedact: return "Redact"
+        case .toolMarquee: return "Rectangular Marquee"
+        case .toolLasso: return "Lasso"
+        case .toolWand: return "Magic Wand"
+        case .toolBucket: return "Fill / Bucket"
         case .swapColors: return "Swap Colors"
         case .resetColors: return "Reset to Black & White"
         case .screenEyedropper: return "Screen Eyedropper\u{2026}"

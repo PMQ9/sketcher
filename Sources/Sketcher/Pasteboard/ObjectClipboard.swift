@@ -85,4 +85,27 @@ enum ObjectClipboard {
     static var hasObjects: Bool {
         NSPasteboard.general.data(forType: objectType) != nil
     }
+
+    /// An external image on the pasteboard (PNG / TIFF, else any `NSImage`
+    /// representation), as a `CGImage`. Now that M6/M7 own the `SurfaceStore`
+    /// lifecycle across undo/redo, pasting external pixels is safe (D22).
+    static func readImage() -> CGImage? {
+        let pasteboard = NSPasteboard.general
+        for type in [NSPasteboard.PasteboardType.png, .tiff] {
+            if let data = pasteboard.data(forType: type),
+               let source = CGImageSourceCreateWithData(data as CFData, nil),
+               let image = CGImageSourceCreateImageAtIndex(source, 0, nil) {
+                return image
+            }
+        }
+        guard let image = NSImage(pasteboard: pasteboard) else { return nil }
+        var rect = CGRect(origin: .zero, size: image.size)
+        return image.cgImage(forProposedRect: &rect, context: nil, hints: nil)
+    }
+
+    static var hasImage: Bool {
+        NSPasteboard.general.canReadItem(withDataConformingToTypes: [
+            NSPasteboard.PasteboardType.png.rawValue,
+            NSPasteboard.PasteboardType.tiff.rawValue])
+    }
 }

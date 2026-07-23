@@ -8,6 +8,7 @@ import SwiftUI
 /// drawn here and ONLY here, so it can never leak into an export.
 struct CanvasView: View {
     @Bindable var viewModel: EditorViewModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         GeometryReader { geometry in
@@ -21,6 +22,8 @@ struct CanvasView: View {
                 // anything the renderer reads has changed.
                 .drawingGroup(opaque: false)
 
+                marchingAntsOverlay
+
                 CanvasEventLayer(viewModel: viewModel,
                                  editingTextID: viewModel.editingTextID,
                                  sceneRevision: viewModel.sceneRevision,
@@ -29,6 +32,22 @@ struct CanvasView: View {
             .onAppear { viewModel.layoutIfNeeded(viewSize: geometry.size) }
             .onChange(of: geometry.size) { _, newSize in
                 viewModel.viewSize = newSize
+            }
+        }
+    }
+
+    /// Marching ants + in-progress region preview, on their own animated layer
+    /// so the main content Canvas is not re-run every animation tick. Honors
+    /// Reduce Motion (a static dash). Never hit-tests, so input still reaches
+    /// the AppKit overlay above it.
+    @ViewBuilder private var marchingAntsOverlay: some View {
+        if viewModel.showsSelectionOverlay {
+            TimelineView(.animation(minimumInterval: 1.0 / 12, paused: reduceMotion)) { timeline in
+                Canvas(rendersAsynchronously: false) { context, _ in
+                    let seconds = timeline.date.timeIntervalSinceReferenceDate
+                    drawSelectionRegion(in: &context, phase: reduceMotion ? 0 : -CGFloat(seconds * 8))
+                }
+                .allowsHitTesting(false)
             }
         }
     }
@@ -112,6 +131,16 @@ struct CanvasView: View {
             if let object = scene.object(with: id) {
                 SceneRenderer.draw(object, surfaces: viewModel.surfaces, into: cg)
             }
+        }
+        // Lifted floating pixels ride above the content under their live
+        // transform. This is the SAME draw `compositeFloat` bakes on drop, so
+        // the preview and the committed result are identical by construction.
+        if let floating = viewModel.selection.floating,
+           let image = viewModel.surfaces.image(floating.surface) {
+            cg.saveGState()
+            cg.concatenate(floating.transform)
+            cg.drawImageYDown(image, in: floating.sourceRect)
+            cg.restoreGState()
         }
     }
 
@@ -206,6 +235,46 @@ struct CanvasView: View {
         // still being assembled.
         if !marqueeing, let frame = viewModel.selectionFrame {
             drawFrame(frame, in: &context, transform: transform)
+        }
+    }
+
+    /// Pixel-region chrome: the committed selection's marching ants (a lifted
+    /// float outlines its transformed rect) plus the in-progress marquee/lasso
+    /// preview. Two strokes — white under an animated black dash — so the ants
+    /// read on any canvas color. `phase` marches the dash; it is 0 under Reduce
+    /// Motion. View space, never through `SceneRenderer`, so it can't export.
+    private func drawSelectionRegion(in context: inout GraphicsContext, phase: CGFloat) {
+        let transform = viewModel.transform
+
+        var previewPath: Path?
+        switch viewModel.interaction {
+        case .selectingRegion(let tool, let anchor, let current, _) where tool != .wand:
+            let rect = transform.toView(CGRect(dragFrom: anchor, to: current))
+            previewPath = viewModel.marqueeEllipse ? Path(ellipseIn: rect) : Path(rect)
+        case .selectingLasso(let points, _):
+            var path = Path()
+            let viewPoints = points.map(transform.toView)
+            if let first = viewPoints.first {
+                path.move(to: first)
+                for point in viewPoints.dropFirst() { path.addLine(to: point) }
+            }
+            previewPath = path
+        default:
+            break
+        }
+
+        var antsPath = Path()
+        for contour in viewModel.antContours() where contour.count >= 2 {
+            let viewPoints = contour.map(transform.toView)
+            antsPath.move(to: viewPoints[0])
+            for point in viewPoints.dropFirst() { antsPath.addLine(to: point) }
+            antsPath.closeSubpath()
+        }
+
+        for path in [previewPath, antsPath].compactMap({ $0 }) where !path.isEmpty {
+            context.stroke(path, with: .color(.white.opacity(0.9)), lineWidth: 1)
+            context.stroke(path, with: .color(.black),
+                           style: StrokeStyle(lineWidth: 1, dash: [4, 4], dashPhase: phase))
         }
     }
 

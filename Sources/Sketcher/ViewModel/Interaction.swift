@@ -30,6 +30,15 @@ enum Interaction: Equatable {
     /// Rubber-band selection of OBJECTS.
     case marquee(anchor: CGPoint, current: CGPoint)
 
+    /// Dragging out a PIXEL region — rectangular/elliptical marquee, or the
+    /// wand's tolerance drag. `mode` is the combine mode from the held modifiers.
+    case selectingRegion(tool: Tool, anchor: CGPoint, current: CGPoint, mode: CombineMode)
+    /// Freehand lasso: accumulating a pixel-region outline.
+    case selectingLasso(points: [CGPoint], mode: CombineMode)
+    /// Dragging lifted floating pixels. The float lives on the view model's
+    /// `selection`; this state only spans the active drag.
+    case movingFloating(last: CGPoint)
+
     case panning(lastViewPoint: CGPoint)
 
     var isIdle: Bool {
@@ -48,7 +57,17 @@ enum Interaction: Equatable {
     var isMutatingGesture: Bool {
         switch self {
         case .drawing, .draggingObjects, .resizing, .rotating, .editingText: return true
-        case .idle, .polyDrafting, .marquee, .panning: return false
+        case .idle, .polyDrafting, .marquee, .panning,
+             .selectingRegion, .selectingLasso, .movingFloating: return false
+        }
+    }
+
+    /// True while a pixel region is being dragged out (not committed yet), so
+    /// the overlay can show the in-progress marquee/lasso.
+    var isSelectingRegion: Bool {
+        switch self {
+        case .selectingRegion, .selectingLasso: return true
+        default: return false
         }
     }
 

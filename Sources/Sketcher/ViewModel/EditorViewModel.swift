@@ -63,6 +63,27 @@ final class EditorViewModel {
     @ObservationIgnored private var lastStrokeTimestamp: TimeInterval = 0
     /// Which erasure the eraser tool performs. Shift+E cycles it.
     var eraserMode: EraserMode = .object
+
+    // MARK: Region-tool state (M7)
+    /// Shift+M draws an elliptical marquee instead of a rectangular one.
+    var marqueeEllipse = false
+    /// Shift+W is Select Similar (every matching pixel), not a contiguous flood.
+    var wandContiguous = true
+    /// Tolerance (0…1) for the wand and bucket; the wand's drag adjusts a copy.
+    var pixelSelectionTolerance: CGFloat = 0.12
+    /// The composite the wand floods, rendered once per gesture and reused while
+    /// the tolerance drag re-floods it.
+    @ObservationIgnored private var wandSource: CGImage?
+    /// The region present when a select gesture began — the stable base every
+    /// frame combines the fresh shape against, so union/subtract don't feed on
+    /// their own partial output.
+    @ObservationIgnored private var regionCombineBase: SelectionShape?
+    /// The pre-lift surface of the layer a floating selection came from, kept so
+    /// the drop can push ONE before→after patch (lift + move + drop = one entry).
+    @ObservationIgnored private var floatingOrigin: (layerID: Layer.ID, image: CGImage)?
+    /// Cached ant contours, keyed on the region, so a mask trace does not re-run
+    /// every animation tick (the region changes only on a selection edit).
+    @ObservationIgnored private var antCache: (region: SelectionShape, contours: [[CGPoint]])?
     /// The polygon-tool shape (from the shape library), used when a `.polygon`
     /// is dragged out.
     var shape: ShapeLibrary.Entry = ShapeLibrary.default
@@ -152,6 +173,12 @@ final class EditorViewModel {
         case .text:
             beginTextTool(at: p, tolerance: tolerance)
 
+        case .marquee, .lasso, .wand:
+            beginRegionSelect(at: p, modifiers: modifiers)
+
+        case .bucket:
+            applyBucket(at: p, modifiers: modifiers)
+
         default:
             // Tools landing in later milestones fall through to select-like
             // behavior rather than doing something surprising.
@@ -175,6 +202,19 @@ final class EditorViewModel {
         case .marquee(let anchor, _):
             interaction = .marquee(anchor: anchor, current: p)
             updateMarqueeSelection(from: anchor, to: p)
+
+        case .selectingRegion(let regionTool, let anchor, _, let mode):
+            interaction = .selectingRegion(tool: regionTool, anchor: anchor,
+                                           current: p, mode: mode)
+            if regionTool == .wand { updateWandDrag(anchor: anchor, to: p, mode: mode) }
+
+        case .selectingLasso(var points, let mode):
+            if let last = points.last, last.distance(to: p) >= 1.5 { points.append(p) }
+            interaction = .selectingLasso(points: points, mode: mode)
+
+        case .movingFloating(let last):
+            moveFloating(by: CGPoint(x: p.x - last.x, y: p.y - last.y))
+            interaction = .movingFloating(last: p)
 
         case .resizing(let handle, let originals, _):
             // Recompute from the ORIGINALS every frame so a long drag never
@@ -213,6 +253,17 @@ final class EditorViewModel {
 
         case .marquee:
             interaction = .idle
+
+        case .selectingRegion(let regionTool, let anchor, let current, let mode):
+            interaction = .idle
+            commitRegionSelect(tool: regionTool, anchor: anchor, current: current, mode: mode)
+
+        case .selectingLasso(let points, let mode):
+            interaction = .idle
+            commitLasso(points: points, mode: mode)
+
+        case .movingFloating:
+            interaction = .idle   // the float stays lifted until it is dropped
 
         case .editingText:
             break   // editing persists across a stray pointer-up; commit is explicit
@@ -420,13 +471,26 @@ final class EditorViewModel {
     }
 
     func cut() {
-        guard canMutateHistory, selection.hasObjects else { return }
-        copySelection()
-        removeSelected(name: "Cut")
+        guard canMutateHistory else { return }
+        if selection.hasObjects {
+            copySelection()
+            removeSelected(name: "Cut")
+        } else if selection.region != nil {
+            cutPixelSelection()
+        }
     }
 
-    func paste() { pasteObjects(offset: pasteOffset) }
-    func pasteInPlace() { pasteObjects(offset: .zero) }
+    /// Objects on the pasteboard paste as objects; an external image pastes as
+    /// an image object (D22). A pixel selection's copy is PNG/TIFF, so pasting
+    /// it back also lands as an image object.
+    func paste() {
+        if ObjectClipboard.hasObjects { pasteObjects(offset: pasteOffset) }
+        else { pasteImageObject(inPlace: false) }
+    }
+    func pasteInPlace() {
+        if ObjectClipboard.hasObjects { pasteObjects(offset: .zero) }
+        else { pasteImageObject(inPlace: true) }
+    }
 
     private func pasteObjects(offset: CGPoint) {
         guard canMutateHistory, let objects = ObjectClipboard.read() else { return }
@@ -787,7 +851,10 @@ final class EditorViewModel {
     /// and writing to it would corrupt history.
     private var canMutateHistory: Bool { !interaction.isMutatingGesture }
 
-    func deleteSelection() { removeSelected(name: "Delete") }
+    func deleteSelection() {
+        if selection.hasObjects { removeSelected(name: "Delete") }
+        else if selection.region != nil { deleteSelectionPixels() }
+    }
 
     private func removeSelected(name: String) {
         guard canMutateHistory, selection.hasObjects else { return }
@@ -813,10 +880,12 @@ final class EditorViewModel {
         if history.record(from: before, to: scene, name: "Nudge") { onChange?(.done) }
     }
 
-    /// Esc cascades: cancel what is in flight, else deselect, else let the
-    /// window handle it (close). Matching the reference's ordering.
+    /// Esc cascades: cancel a mid-drag gesture, else COMMIT a placed float
+    /// (deselecting keeps the move — ⌘Z is the one that abandons it), else
+    /// deselect, else let the window handle it (close).
     func escape() {
-        if abortInFlightGesture() { return }
+        if !interaction.isIdle { abortInFlightGesture(); return }
+        if selection.floating != nil { dropFloating(); return }
         if !selection.isEmpty { selection.clear() }
     }
 
@@ -950,10 +1019,18 @@ final class EditorViewModel {
         pruneSurfaces()
     }
 
-    /// Drop surfaces referenced by neither the live scene NOR any history entry.
-    /// Keeping the history's surfaces is what lets a redaction survive undo→redo.
+    /// Drop surfaces referenced by neither the live scene NOR any history entry
+    /// NOR the current selection. Keeping the history's surfaces is what lets a
+    /// redaction survive undo→redo; keeping the selection's is what stops a live
+    /// wand mask or a lifted float being collected out from under the user.
     private func pruneSurfaces() {
-        surfaces.prune(keeping: scene.referencedSurfaceIDs.union(history.referencedSurfaceIDs))
+        var keep = scene.referencedSurfaceIDs
+            .union(history.referencedSurfaceIDs)
+            .union(selection.referencedSurfaceIDs)
+        // Keep the in-flight combine base too, or a Shift+wand drag re-flooding
+        // each frame would collect the mask it is combining against.
+        if case .mask(let id, _)? = regionCombineBase { keep.insert(id) }
+        surfaces.prune(keeping: keep)
     }
 
     // MARK: - Style editing (inspector)
@@ -1113,12 +1190,25 @@ final class EditorViewModel {
             interaction = .idle
             if let restored = history.abort() { scene = restored }
             return true
+        case .selectingRegion, .selectingLasso:
+            // Selection changes are not undoable; abandon the in-flight region
+            // and revert to whatever was selected when the gesture began.
+            interaction = .idle
+            selection.region = regionCombineBase
+            regionCombineBase = nil
+            return true
+        case .movingFloating:
+            interaction = .idle
+            abortFloating()
+            return true
         case .editingText:
             // ⌘Z mid-edit abandons the edit (a brand-new box disappears; an
             // existing one reverts), consistent with mid-gesture abort.
             cancelTextEditing()
             return true
         case .idle, .panning:
+            // A placed-but-undropped float: ⌘Z abandons it (restores the source).
+            if selection.floating != nil { abortFloating(); return true }
             return false
         }
     }
@@ -1130,11 +1220,14 @@ final class EditorViewModel {
         case .editingText:
             // Switching tools keeps the text, as clicking away does.
             commitTextEditing()
-        case .drawing, .polyDrafting, .marquee, .draggingObjects, .resizing, .rotating:
+        case .drawing, .polyDrafting, .marquee, .draggingObjects, .resizing, .rotating,
+             .selectingRegion, .selectingLasso, .movingFloating:
             abortInFlightGesture()
         case .idle, .panning:
             break
         }
+        // A tool change drops a lifted-but-undropped float, as clicking away does.
+        if selection.floating != nil { dropFloating() }
     }
 
     func undo() {
@@ -1831,6 +1924,472 @@ extension EditorViewModel {
         let before = scene
         scene.layers.swapAt(idx, idx + delta)
         if history.record(from: before, to: scene, name: "Reorder Layer") { onChange?(.done) }
+    }
+}
+
+// MARK: - Region selection & floating pixels (M7)
+
+/// Marquee / lasso / wand region selection and the lift → transform → drop
+/// floating-pixels lifecycle. Same-file, like the eraser / text / layer
+/// lifecycles: it drives the file-private `scene` / `history` / `surfaces` /
+/// `interaction`.
+///
+/// A pixel region lives on `selection.region` — never in `Scene`, never
+/// undoable. Lifting turns it into `selection.floating`: the source layer's
+/// surface is swapped to a cleared copy immediately (so the move reads right on
+/// screen) but NO history entry is pushed. The original surface is stashed in
+/// `floatingOrigin`, and the drop pushes ONE before→after `RasterPatch`, so
+/// lift + move + drop collapse into a single undo step.
+extension EditorViewModel {
+
+    // MARK: Derived state for the overlay
+
+    /// Whether the marching-ants overlay should be present (a committed region,
+    /// a lifted float, or an in-progress region drag).
+    var showsSelectionOverlay: Bool {
+        selection.region != nil || selection.floating != nil || interaction.isSelectingRegion
+    }
+
+    /// The committed selection's ant contours, in canvas pixels. A floating
+    /// selection's outline is four transformed corners (recomputed live, cheap);
+    /// a committed region is cached, so a mask's marching-squares trace runs only
+    /// when the region actually changes, not every animation frame.
+    func antContours() -> [[CGPoint]] {
+        if selection.floating != nil {
+            return MarchingAnts.contours(for: selection, canvas: scene.canvas, surfaces: surfaces)
+        }
+        guard let region = selection.region else { return [] }
+        if let cache = antCache, cache.region == region { return cache.contours }
+        let contours = MarchingAnts.contours(for: selection, canvas: scene.canvas, surfaces: surfaces)
+        antCache = (region, contours)
+        return contours
+    }
+
+    // MARK: Region creation
+
+    func beginRegionSelect(at p: CGPoint, modifiers: EventModifiers) {
+        let mode = CombineMode(shift: modifiers.contains(.shift),
+                               option: modifiers.contains(.option))
+        // A plain click/drag INSIDE the current selection lifts and moves it —
+        // but only when there are pixels to lift (active raster layer). On a
+        // vector layer the pixel tools only ever select (D38-style fallback).
+        if mode == .replace, selection.floating == nil,
+           activeRasterSurface != nil, selectionContains(p) {
+            beginFloatingDrag(at: p)
+            return
+        }
+        // Starting a brand-new selection drops any placed float first.
+        if selection.floating != nil { dropFloating() }
+        regionCombineBase = selection.region
+
+        switch tool {
+        case .lasso:
+            interaction = .selectingLasso(points: [p], mode: mode)
+        case .wand:
+            wandSource = RasterOps.render(scene, surfaces: surfaces)
+            commitWand(seed: p, tolerance: pixelSelectionTolerance, mode: mode)
+            interaction = .selectingRegion(tool: .wand, anchor: p, current: p, mode: mode)
+        default:   // marquee / elliptical marquee
+            interaction = .selectingRegion(tool: .marquee, anchor: p, current: p, mode: mode)
+        }
+    }
+
+    /// Rectangular / elliptical marquee, committed on mouse-up.
+    func commitRegionSelect(tool: Tool, anchor: CGPoint, current: CGPoint, mode: CombineMode) {
+        defer { regionCombineBase = nil; wandSource = nil }
+        if tool == .wand { return }   // the wand already set the region live
+        let rect = CGRect(dragFrom: anchor, to: current).intersection(scene.canvas.pageRect)
+        guard rect.width >= 1, rect.height >= 1 else {
+            clickToDeselect(mode: mode)
+            return
+        }
+        let shape: SelectionShape = marqueeEllipse ? .ellipse(rect) : .rect(rect)
+        setRegion(combine(regionCombineBase, shape, mode))
+    }
+
+    /// Freehand lasso, committed on mouse-up.
+    func commitLasso(points: [CGPoint], mode: CombineMode) {
+        defer { regionCombineBase = nil }
+        guard points.count >= 3 else { clickToDeselect(mode: mode); return }
+        setRegion(combine(regionCombineBase, .polygon(points: points, evenOdd: false), mode))
+    }
+
+    /// The wand's live tolerance drag: horizontal distance from the seed widens
+    /// or narrows tolerance, re-flooding the cached composite (Procreate's feel).
+    func updateWandDrag(anchor: CGPoint, to p: CGPoint, mode: CombineMode) {
+        let tolerance = max(0.01, min(1, pixelSelectionTolerance + (p.x - anchor.x) * 0.001))
+        commitWand(seed: anchor, tolerance: tolerance, mode: mode)
+    }
+
+    private func commitWand(seed: CGPoint, tolerance: CGFloat, mode: CombineMode) {
+        guard let source = wandSource,
+              let regionImage = FloodFill.region(in: source, seed: seed, tolerance: tolerance,
+                                                 contiguous: wandContiguous,
+                                                 canvas: scene.canvas) else { return }
+        let bounds = MaskOps.nonEmptyBounds(regionImage, canvas: scene.canvas)
+        guard !bounds.isNull, !bounds.isEmpty else { return }
+        let wand = SelectionShape.mask(surfaces.register(regionImage), bounds: bounds)
+        setRegion(combine(regionCombineBase, wand, mode))
+    }
+
+    /// A click with no drag: clear the selection (replace mode) or leave the
+    /// base untouched (a mis-started combine).
+    private func clickToDeselect(mode: CombineMode) {
+        if mode == .replace {
+            selection.region = nil
+            selection.featherPx = 0
+        } else {
+            selection.region = regionCombineBase
+        }
+        pruneSurfaces()
+    }
+
+    private func combine(_ base: SelectionShape?, _ shape: SelectionShape,
+                         _ mode: CombineMode) -> SelectionShape? {
+        MaskOps.combine(base, shape, mode: mode, canvas: scene.canvas, surfaces: surfaces)
+    }
+
+    /// A pixel region replaces any object selection (they are two different
+    /// domains, one keystroke apart — the `V` vs `M`/`Q`/`W` rule).
+    private func setRegion(_ region: SelectionShape?) {
+        selection.objectIDs.removeAll()
+        selection.region = region
+        pruneSurfaces()
+    }
+
+    // MARK: Region commands
+
+    func selectAllPixels() { setRegion(.rect(scene.canvas.pageRect)) }
+
+    func invertSelection() {
+        guard let region = selection.region else { return }
+        setRegion(MaskOps.invert(region, canvas: scene.canvas, surfaces: surfaces))
+    }
+
+    func growSelection() { morphSelection(byPoints: 3) }
+    func shrinkSelection() { morphSelection(byPoints: -3) }
+
+    private func morphSelection(byPoints points: CGFloat) {
+        guard let region = selection.region else { return }
+        let deltaPx = scene.canvas.px(fromPoints: points)
+        setRegion(MaskOps.morphology(region, deltaPx: deltaPx,
+                                     canvas: scene.canvas, surfaces: surfaces) ?? region)
+    }
+
+    func featherSelection() {
+        guard let region = selection.region else { return }
+        let radiusPx = scene.canvas.px(fromPoints: 4)
+        selection.featherPx = radiusPx
+        setRegion(MaskOps.feather(region, radiusPx: radiusPx,
+                                  canvas: scene.canvas, surfaces: surfaces) ?? region)
+    }
+
+    // MARK: Fill / clear the region
+
+    /// Fill the selection with a color, clipped through the region — Fill
+    /// Selection (Opt/Cmd+Delete). Targets the active raster layer; on a vector
+    /// layer it is a no-op (run Rasterize Layer first, matching the eraser).
+    func fillSelection(with color: RGBAColor) {
+        guard canMutateHistory, let region = selection.region,
+              let raster = activeRasterSurface,
+              let filled = paintRegion(color, region: region, onto: raster.image) else { return }
+        let dirty = RasterPatch.quantize(region.bounds.insetBy(dx: -1, dy: -1),
+                                         in: scene.canvas.pageRect)
+        commitRasterMutation(layerIndex: raster.index, before: raster.image, after: filled,
+                             dirty: dirty, name: "Fill Selection")
+    }
+
+    /// Clear the selected pixels to transparent — Delete with a region active.
+    func deleteSelectionPixels() {
+        guard canMutateHistory, let region = selection.region,
+              let raster = activeRasterSurface,
+              let cleared = clearRegion(in: raster.image, region: region) else { return }
+        let dirty = RasterPatch.quantize(region.bounds.insetBy(dx: -1, dy: -1),
+                                         in: scene.canvas.pageRect)
+        commitRasterMutation(layerIndex: raster.index, before: raster.image, after: cleared,
+                             dirty: dirty, name: "Clear")
+    }
+
+    // MARK: Floating pixels — lift / move / drop
+
+    /// Lift the selected pixels off the active raster layer into a live float.
+    /// The layer's surface is swapped to a cleared copy WITHOUT a history push;
+    /// the original is stashed so the drop can record one patch.
+    private func beginFloatingDrag(at p: CGPoint) {
+        guard let region = selection.region, let raster = activeRasterSurface else { return }
+        let bounds = region.bounds.integral.intersection(scene.canvas.pageRect)
+        guard bounds.width >= 1, bounds.height >= 1,
+              let floatImage = liftPixels(from: raster.image, region: region, bounds: bounds),
+              let cleared = clearRegion(in: raster.image, region: region) else { return }
+
+        floatingOrigin = (layerID: scene.layers[raster.index].id, image: raster.image)
+        let clearedID = surfaces.register(cleared)
+        scene.withLayer(scene.layers[raster.index].id) { $0.content = .raster(clearedID) }
+        selection.floating = FloatingPixels(
+            surface: surfaces.register(floatImage), sourceRect: bounds,
+            transform: .identity, originalTransform: .identity,
+            liftedFromLayer: scene.layers[raster.index].id, liftMode: .cut)
+        interaction = .movingFloating(last: p)
+        pruneSurfaces()
+    }
+
+    func moveFloating(by delta: CGPoint) {
+        guard var floating = selection.floating else { return }
+        floating.transform = floating.transform
+            .concatenating(CGAffineTransform(translationX: delta.x, y: delta.y))
+        selection.floating = floating
+    }
+
+    /// Composite the float back down as ONE patch: pre-lift → (source cleared +
+    /// float placed). Return/tool-change/click-away call this.
+    func dropFloating() {
+        guard let floating = selection.floating, let origin = floatingOrigin,
+              let index = scene.index(of: origin.layerID),
+              case .raster(let currentID) = scene.layers[index].content,
+              let cleared = surfaces.image(currentID),
+              let floatImage = surfaces.image(floating.surface),
+              let dropped = compositeFloat(floatImage, transform: floating.transform,
+                                           sourceRect: floating.sourceRect, onto: cleared) else {
+            selection.floating = nil
+            floatingOrigin = nil
+            return
+        }
+        let dirty = RasterPatch.quantize(
+            floating.sourceRect.union(transformedBounds(floating)).insetBy(dx: -1, dy: -1),
+            in: scene.canvas.pageRect)
+        selection.floating = nil
+        selection.region = nil
+        floatingOrigin = nil
+        // before == the ORIGINAL surface, so undo lands on the un-moved image.
+        commitRasterMutation(layerIndex: index, before: origin.image, after: dropped,
+                             dirty: dirty, name: "Move Selection")
+    }
+
+    /// Return the source surface to its pre-lift state — ⌘Z / Esc mid-float.
+    func abortFloating() {
+        defer { selection.floating = nil; floatingOrigin = nil }
+        guard let origin = floatingOrigin, scene.index(of: origin.layerID) != nil else { return }
+        let id = surfaces.register(origin.image)
+        scene.withLayer(origin.layerID) { $0.content = .raster(id) }
+        selection.region = nil
+        pruneSurfaces()
+    }
+
+    /// Return / Enter commits a lifted float.
+    func commitFloating() { if selection.floating != nil { dropFloating() } }
+
+    // MARK: Pixel clipboard
+
+    /// Copy the selected pixels (the composite within the region) as PNG + TIFF.
+    func copyPixelSelection() {
+        guard let image = selectionImage() else { return }
+        PasteboardWriter.write(image, pixelsPerPoint: scene.canvas.pixelsPerPoint)
+    }
+
+    /// Cut: copy, then clear the region on the active raster layer.
+    func cutPixelSelection() {
+        copyPixelSelection()
+        deleteSelectionPixels()
+    }
+
+    /// Paste an external image as an `.image` object (D22): selectable and
+    /// movable with the `V` tool, one undo entry, no raster-layer requirement.
+    /// Returns false if the pasteboard carries no image.
+    @discardableResult
+    func pasteImageObject(inPlace: Bool) -> Bool {
+        guard canMutateHistory, let image = ObjectClipboard.readImage() else { return false }
+        let size = PixelSize(width: image.width, height: image.height)
+        let id = surfaces.register(image)
+        let page = scene.canvas.pageRect
+        let origin = inPlace
+            ? CGPoint(x: page.midX - CGFloat(size.width) / 2, y: page.midY - CGFloat(size.height) / 2)
+            : CGPoint(x: page.midX - CGFloat(size.width) / 2 + pasteOffset.x,
+                      y: page.midY - CGFloat(size.height) / 2 + pasteOffset.y)
+        let rect = CGRect(origin: origin, size: CGSize(width: size.width, height: size.height))
+        let payload = RasterPayload(surface: id, rect: rect, intrinsicPixelSize: size)
+        let before = scene
+        let object = DrawObject(kind: .image(payload), style: ObjectStyle(strokeColor: nil))
+        scene.addObject(object)
+        selection.region = nil
+        selection.objectIDs = [object.id]
+        if history.record(from: before, to: scene, name: "Paste Image") { onChange?(.done) }
+        pruneSurfaces()
+        return true
+    }
+
+    // MARK: Bucket fill
+
+    /// The bucket. On a vector shape's interior it sets that shape's fill —
+    /// resolution-independent and non-destructive, the DEFAULT bucket behavior.
+    /// Otherwise it flood-fills the active raster layer with the SAME
+    /// `FloodFill.region` the wand uses, so their tolerance can never diverge.
+    func applyBucket(at p: CGPoint, modifiers: EventModifiers) {
+        guard canMutateHistory else { return }
+        if let target = closedShapeHit(at: p) {
+            fillVectorObject(target)
+            return
+        }
+        fillRasterBucket(at: p)
+    }
+
+    private func fillVectorObject(_ id: UUID) {
+        let before = scene
+        scene.withObject(id) { $0.style.fill = .solid(self.primaryColor) }
+        selection.objectIDs = [id]
+        selection.region = nil
+        if history.record(from: before, to: scene, name: "Fill") { onChange?(.done) }
+    }
+
+    private func fillRasterBucket(at p: CGPoint) {
+        guard let raster = activeRasterSurface,
+              let regionImage = FloodFill.region(in: raster.image, seed: p,
+                                                 tolerance: pixelSelectionTolerance,
+                                                 contiguous: true, canvas: scene.canvas) else { return }
+        let bounds = MaskOps.nonEmptyBounds(regionImage, canvas: scene.canvas)
+        guard !bounds.isNull, !bounds.isEmpty else { return }
+        let region = SelectionShape.mask(surfaces.register(regionImage), bounds: bounds)
+        guard let filled = paintRegion(primaryColor, region: region, onto: raster.image) else { return }
+        let dirty = RasterPatch.quantize(bounds.insetBy(dx: -1, dy: -1), in: scene.canvas.pageRect)
+        commitRasterMutation(layerIndex: raster.index, before: raster.image, after: filled,
+                             dirty: dirty, name: "Bucket Fill")
+    }
+
+    /// The topmost fillable closed shape whose INTERIOR contains `p` (bucket uses
+    /// interior, unlike the border-band hit test that lets you click through).
+    private func closedShapeHit(at p: CGPoint) -> UUID? {
+        for layer in scene.layers.reversed() where layer.isEditable && layer.isVector {
+            for object in layer.objects.reversed()
+            where !object.isLocked && !object.isHidden && objectInteriorContains(object, p) {
+                return object.id
+            }
+        }
+        return nil
+    }
+
+    private func objectInteriorContains(_ object: DrawObject, _ p: CGPoint) -> Bool {
+        switch object.kind {
+        case .rectangle, .ellipse, .polygon: break
+        case .polyline(_, let closed) where closed: break
+        default: return false
+        }
+        let local = object.rotation != 0
+            ? p.rotated(around: object.rotationCenter, by: -object.rotation) : p
+        guard let path = ObjectPaths.path(for: object) else { return false }
+        return path.contains(local, using: .winding)
+    }
+
+    // MARK: Hit test / helpers
+
+    /// Whether `p` (canvas pixels) is inside the current selection region.
+    func selectionContains(_ p: CGPoint) -> Bool {
+        guard let region = selection.region else { return false }
+        guard region.bounds.insetBy(dx: -1, dy: -1).contains(p) else { return false }
+        if let path = region.makePath() {
+            return path.contains(p, using: region.usesEvenOdd ? .evenOdd : .winding,
+                                 transform: .identity)
+        }
+        if case .mask(let id, _) = region, let mask = surfaces.image(id),
+           let buffer = MaskOps.readGray(mask, width: scene.canvas.pixelSize.width,
+                                         height: scene.canvas.pixelSize.height) {
+            let x = Int(p.x.rounded(.down)), y = Int(p.y.rounded(.down))
+            let w = scene.canvas.pixelSize.width, h = scene.canvas.pixelSize.height
+            guard x >= 0, y >= 0, x < w, y < h else { return false }
+            return buffer[y * w + x] > 127
+        }
+        return false
+    }
+
+    private var activeRasterSurface: (index: Int, id: SurfaceID, image: CGImage)? {
+        guard let index = scene.activeLayerIndex, scene.layers[index].isEditable,
+              case .raster(let id) = scene.layers[index].content,
+              let image = surfaces.image(id) else { return nil }
+        return (index, id, image)
+    }
+
+    private func transformedBounds(_ floating: FloatingPixels) -> CGRect {
+        let r = floating.sourceRect
+        let corners = [CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.maxX, y: r.minY),
+                       CGPoint(x: r.maxX, y: r.maxY), CGPoint(x: r.minX, y: r.maxY)]
+        return CGRect(containing: corners.map { $0.applying(floating.transform) })
+    }
+
+    /// The composite within the region, cropped to its bounds — for copy.
+    private func selectionImage() -> CGImage? {
+        guard let region = selection.region,
+              let composite = RasterOps.render(scene, surfaces: surfaces) else { return nil }
+        let bounds = region.bounds.integral.intersection(scene.canvas.pageRect)
+        guard bounds.width >= 1, bounds.height >= 1 else { return nil }
+        return liftPixels(from: composite, region: region, bounds: bounds)
+    }
+
+    /// Crop the pixels of `source` inside `region` into a `bounds`-sized tile.
+    private func liftPixels(from source: CGImage, region: SelectionShape,
+                            bounds: CGRect) -> CGImage? {
+        let w = Int(bounds.width), h = Int(bounds.height)
+        guard let ctx = PixelFormat.makeContext(width: w, height: h,
+                                                colorSpace: scene.canvas.cgColorSpace) else { return nil }
+        ctx.translateBy(x: 0, y: CGFloat(h))
+        ctx.scaleBy(x: 1, y: -1)                       // y-down tile
+        ctx.translateBy(x: -bounds.minX, y: -bounds.minY)   // bounds.origin → (0,0)
+        MaskOps.clip(region, in: ctx, canvas: scene.canvas, surfaces: surfaces)
+        ctx.setBlendMode(.copy)
+        ctx.drawImageYDown(source, in: scene.canvas.pageRect)
+        return ctx.makeImage()
+    }
+
+    /// A copy of `source` with the region cleared to alpha 0 (never white, T15).
+    private func clearRegion(in source: CGImage, region: SelectionShape) -> CGImage? {
+        let size = scene.canvas.pixelSize
+        guard let ctx = PixelFormat.makeContext(width: size.width, height: size.height,
+                                                colorSpace: scene.canvas.cgColorSpace) else { return nil }
+        ctx.translateBy(x: 0, y: CGFloat(size.height))
+        ctx.scaleBy(x: 1, y: -1)
+        ctx.setBlendMode(.copy)
+        ctx.drawImageYDown(source, in: size.rect)
+        ctx.saveGState()
+        MaskOps.clip(region, in: ctx, canvas: scene.canvas, surfaces: surfaces)
+        ctx.setBlendMode(.clear)
+        ctx.fill(size.rect)
+        ctx.restoreGState()
+        return ctx.makeImage()
+    }
+
+    /// A copy of `source` with `color` painted inside the region.
+    private func paintRegion(_ color: RGBAColor, region: SelectionShape,
+                             onto source: CGImage) -> CGImage? {
+        let size = scene.canvas.pixelSize
+        guard let ctx = PixelFormat.makeContext(width: size.width, height: size.height,
+                                                colorSpace: scene.canvas.cgColorSpace) else { return nil }
+        ctx.translateBy(x: 0, y: CGFloat(size.height))
+        ctx.scaleBy(x: 1, y: -1)
+        ctx.setBlendMode(.copy)
+        ctx.drawImageYDown(source, in: size.rect)
+        ctx.saveGState()
+        MaskOps.clip(region, in: ctx, canvas: scene.canvas, surfaces: surfaces)
+        ctx.setBlendMode(.normal)
+        ctx.setFillColor(color.cgColor)
+        ctx.fill(size.rect)
+        ctx.restoreGState()
+        return ctx.makeImage()
+    }
+
+    /// The dropped surface: cleared source with the float composited under its
+    /// transform — the SAME draw the overlay previews, so screen == drop result.
+    private func compositeFloat(_ floatImage: CGImage, transform: CGAffineTransform,
+                                sourceRect: CGRect, onto source: CGImage) -> CGImage? {
+        let size = scene.canvas.pixelSize
+        guard let ctx = PixelFormat.makeContext(width: size.width, height: size.height,
+                                                colorSpace: scene.canvas.cgColorSpace) else { return nil }
+        ctx.translateBy(x: 0, y: CGFloat(size.height))
+        ctx.scaleBy(x: 1, y: -1)
+        ctx.setBlendMode(.copy)
+        ctx.drawImageYDown(source, in: size.rect)
+        ctx.setBlendMode(.normal)
+        ctx.saveGState()
+        ctx.concatenate(transform)
+        ctx.drawImageYDown(floatImage, in: sourceRect)
+        ctx.restoreGState()
+        return ctx.makeImage()
     }
 }
 
