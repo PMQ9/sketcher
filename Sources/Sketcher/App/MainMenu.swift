@@ -12,6 +12,7 @@ enum MainMenu {
         main.addItem(submenu: editMenu(), title: "Edit")
         main.addItem(submenu: arrangeMenu(), title: "Arrange")
         main.addItem(submenu: toolsMenu(), title: "Tools")
+        main.addItem(submenu: layerMenu(), title: "Layer")
         main.addItem(submenu: canvasMenu(), title: "Canvas")
         main.addItem(submenu: colorMenu(), title: "Color")
         main.addItem(submenu: formatMenu(), title: "Format")
@@ -134,6 +135,27 @@ enum MainMenu {
         return menu
     }
 
+    private static func layerMenu() -> NSMenu {
+        let menu = NSMenu(title: "Layer")
+        menu.addCommand(.newLayer)
+        menu.addCommand(.newRasterLayer)
+        menu.addCommand(.duplicateLayer)
+        menu.addCommand(.deleteLayer)
+        menu.addItem(.separator())
+        menu.addCommand(.raiseLayer)
+        menu.addCommand(.lowerLayer)
+        menu.addItem(.separator())
+        menu.addCommand(.rasterizeLayer)
+        menu.addCommand(.mergeDown)
+        menu.addCommand(.flattenImage)
+        menu.addItem(.separator())
+        // Shift+B / Shift+E cycles live in CanvasEventView (must not fire while a
+        // text field owns the keyboard), so these carry the hint in the title.
+        let brush = menu.addCommand(.toolBrush); brush.title = "Cycle Brush  (\u{21E7}B)"
+        let eraser = menu.addCommand(.toolEraser); eraser.title = "Cycle Eraser  (\u{21E7}E)"
+        return menu
+    }
+
     private static func canvasMenu() -> NSMenu {
         let menu = NSMenu(title: "Canvas")
         menu.addCommand(.backgroundLight)
@@ -181,6 +203,8 @@ enum MainMenu {
         menu.addCommand(.zoomOut)
         menu.addCommand(.zoomActualSize)
         menu.addCommand(.zoomToFit)
+        menu.addItem(.separator())
+        menu.addCommand(.toggleAntialias)
         return menu
     }
 

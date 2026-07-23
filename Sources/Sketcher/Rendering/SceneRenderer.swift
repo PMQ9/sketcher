@@ -124,15 +124,21 @@ enum SceneRenderer {
             ctx.translateBy(x: -c.x, y: -c.y)
         }
 
-        // Partial erase: clip AWAY the erased region. Uses the even-odd trick
-        // of clipping to (huge rect + erased path) so the erased area is the
-        // hole — CGContext has no direct "subtract from clip".
+        // Partial erase: clip AWAY the erased region. Each subpath is punched as
+        // its OWN hole — (huge rect + one subpath), even-odd — and the sequential
+        // clips intersect. Combining all subpaths into one even-odd path would
+        // un-erase wherever two eraser strokes overlap (winding 2 reads as
+        // "outside the hole"); clipping them one at a time keeps the overlap
+        // erased. CGContext has no direct "subtract from clip".
         if let erased = object.erasedGeometry, !erased.isEmpty {
-            let hole = CGMutablePath()
-            hole.addRect(CGRect(x: -1e6, y: -1e6, width: 2e6, height: 2e6))
-            hole.addPath(erased.makePath())
-            ctx.addPath(hole)
-            ctx.clip(using: .evenOdd)
+            for sub in erased.subpaths where sub.count >= 3 {
+                let hole = CGMutablePath()
+                hole.addRect(CGRect(x: -1e6, y: -1e6, width: 2e6, height: 2e6))
+                hole.addLines(between: sub)
+                hole.closeSubpath()
+                ctx.addPath(hole)
+                ctx.clip(using: .evenOdd)
+            }
         }
 
         drawUnrotated(object, surfaces: surfaces, into: ctx)
@@ -151,12 +157,10 @@ enum SceneRenderer {
             drawArrow(payload, style: style, in: ctx)
 
         case .stroke(let payload):
-            let brush = payload.brush
-            let width = brush.sizePx * brush.widthMultiplier
             let color = (style.strokeColor ?? .black).cgColor
-            StrokeGeometry.stroke(payload.points, width: width, color: color,
-                                  blendMode: brush.blendMode, dash: style.dash,
-                                  antialias: style.antialias, in: ctx)
+            StrokeGeometry.fill(BrushEngine.outline(for: payload), color: color,
+                                blendMode: payload.brush.blendMode,
+                                antialias: style.antialias, in: ctx)
 
         case .text(let payload):
             TextMetrics.draw(payload, color: (style.strokeColor ?? .black).cgColor, in: ctx)

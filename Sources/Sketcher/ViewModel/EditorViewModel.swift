@@ -57,6 +57,12 @@ final class EditorViewModel {
     /// edits to these fields apply to the selection instead.
     var style: ObjectStyle
     var brush = BrushSpec()
+    /// The live brush stabilizer, reset at each stroke start. Transient input
+    /// state, not UI state, so it is kept out of observation.
+    @ObservationIgnored private var strokeStabilizer = OneEuroFilter()
+    @ObservationIgnored private var lastStrokeTimestamp: TimeInterval = 0
+    /// Which erasure the eraser tool performs. Shift+E cycles it.
+    var eraserMode: EraserMode = .object
     /// The polygon-tool shape (from the shape library), used when a `.polygon`
     /// is dragged out.
     var shape: ShapeLibrary.Entry = ShapeLibrary.default
@@ -128,8 +134,11 @@ final class EditorViewModel {
         case .select:
             beginSelectGesture(at: p, tolerance: tolerance, modifiers: modifiers)
 
-        case .brush, .eraser:
+        case .brush:
             beginStroke(at: p, modifiers: modifiers)
+
+        case .eraser:
+            beginEraserStroke(at: p)
 
         case .rectangle, .ellipse, .polygon, .line, .arrow:
             beginShape(at: p, modifiers: modifiers)
@@ -512,8 +521,32 @@ final class EditorViewModel {
         strokeStyle.strokeColor = primaryColor
         let payload = StrokePayload(samples: [StrokeSample(point: p)], brush: brush)
         let draft = DrawObject(kind: .stroke(payload), style: strokeStyle)
+        seedStabilizer(at: p)
         history.begin(scene)
         interaction = .drawing(draft: draft, anchor: p)
+    }
+
+    /// Reset the live stabilizer to this stroke's start. The first sample passes
+    /// through untouched (dt == 0) and seeds the filter.
+    private func seedStabilizer(at p: CGPoint) {
+        strokeStabilizer = OneEuroFilter.forStreamline(brush.streamline)
+        lastStrokeTimestamp = Date().timeIntervalSince1970
+        _ = strokeStabilizer.filter(p, dt: 0)
+    }
+
+    /// The eraser accumulates a stroke like the brush, shown as a faint neutral
+    /// preview so the swept band is visible. It opens NO history bracket — the
+    /// erasure is recorded once at commit (a scene diff, or a raster patch).
+    private func beginEraserStroke(at p: CGPoint) {
+        var previewStyle = ObjectStyle(strokeColor: RGBAColor(r: 0.5, g: 0.5, b: 0.5, a: 0.4))
+        previewStyle.fill = .none
+        var previewBrush = brush
+        previewBrush.engine = .pen           // constant-width band, no taper
+        previewBrush.simulatePressure = false
+        let payload = StrokePayload(samples: [StrokeSample(point: p)], brush: previewBrush)
+        seedStabilizer(at: p)
+        interaction = .drawing(draft: DrawObject(kind: .stroke(payload), style: previewStyle),
+                               anchor: p)
     }
 
     private func beginShape(at p: CGPoint, modifiers: EventModifiers) {
@@ -547,11 +580,17 @@ final class EditorViewModel {
                              pressure: CGFloat, modifiers: EventModifiers) {
         switch draft.kind {
         case .stroke(var payload):
-            // Drop samples closer than the minimum spacing: pointer jitter adds
-            // points that cost time and make the smoothed curve wobble.
-            guard StrokeGeometry.shouldAppend(p, to: payload.samples) else { return }
-            payload.samples.append(StrokeSample(point: p, pressure: pressure,
-                                                timestamp: Date().timeIntervalSince1970))
+            // Stabilize first (kills tremor), then drop samples closer than the
+            // minimum spacing: jitter points cost time and add nothing to the
+            // outline. The filter still advances on skipped points, so its speed
+            // estimate stays honest.
+            let now = Date().timeIntervalSince1970
+            let dt = lastStrokeTimestamp > 0 ? CGFloat(now - lastStrokeTimestamp) : 0
+            lastStrokeTimestamp = now
+            let smoothed = strokeStabilizer.filter(p, dt: dt)
+            guard StrokeGeometry.shouldAppend(smoothed, to: payload.samples) else { return }
+            payload.samples.append(StrokeSample(point: smoothed, pressure: pressure,
+                                                timestamp: now))
             draft.kind = .stroke(payload)
 
         case .rectangle(_, let radius):
@@ -624,6 +663,12 @@ final class EditorViewModel {
     // MARK: - Commit
 
     private func commitDraft(_ draft: DrawObject, anchor: CGPoint, end: CGPoint) {
+        // The eraser accumulates a stroke like the brush but never becomes an
+        // object — its swept path drives an erasure at commit (D-M6).
+        if tool == .eraser, case .stroke(let payload) = draft.kind {
+            commitEraserStroke(payload)
+            return
+        }
         guard isCommittable(draft, anchor: anchor, end: end) else {
             // Degenerate draft: restore and push nothing, so a stray click does
             // not litter the document or the undo stack.
@@ -787,6 +832,9 @@ final class EditorViewModel {
         brush.sizePx = scene.canvas.px(fromPoints: ladder[next])
         style.strokeWidthPx = brush.sizePx
     }
+
+    /// Shift+B cycles the brush preset (pen → pressure → pencil → …).
+    func cycleBrushEngine() { brush.engine = brush.engine.next }
 
     /// Pick a library shape and arm the polygon tool to draw it.
     func selectShape(_ entry: ShapeLibrary.Entry) {
@@ -971,6 +1019,19 @@ final class EditorViewModel {
         }
     }
 
+    /// Flip antialiasing — the pixel-art switch. Applies to the selection (one
+    /// undo entry) or the armed-tool default.
+    func toggleAntialias() {
+        if selection.hasObjects {
+            let before = scene
+            let on = !(orderedSelection().last?.style.antialias ?? true)
+            for id in selection.objectIDs { scene.withObject(id) { $0.style.antialias = on } }
+            if history.record(from: before, to: scene, name: "Antialiasing") { onChange?(.done) }
+        } else {
+            style.antialias.toggle()
+        }
+    }
+
     func setCornerRadiusPx(_ radius: CGFloat) {
         if selection.hasObjects {
             for id in selection.objectIDs {
@@ -1079,18 +1140,21 @@ final class EditorViewModel {
     func undo() {
         if abortInFlightGesture() { return }
         guard let entry = history.undo(current: scene) else { return }
-        apply(entry)
+        apply(entry, undo: true)
         onChange?(.undone)
     }
 
     func redo() {
         guard interaction.isIdle else { return }
         guard let entry = history.redo(current: scene) else { return }
-        apply(entry)
+        apply(entry, undo: false)
         onChange?(.redone)
     }
 
-    private func apply(_ entry: HistoryEntry) {
+    /// A `.scene` entry restores wholesale; a `.rasterPatch` composites the
+    /// `before` tile on undo and the `after` tile on redo back into the layer's
+    /// live surface — the direction is why this takes `undo`.
+    private func apply(_ entry: HistoryEntry, undo: Bool) {
         switch entry {
         case .scene(let restored, _):
             scene = restored
@@ -1098,8 +1162,8 @@ final class EditorViewModel {
             let live = Set(scene.allObjects.map(\.id))
             selection.objectIDs.formIntersection(live)
             pruneSurfaces()
-        case .rasterPatch:
-            break   // M6
+        case .rasterPatch(let patch, _):
+            applyRasterPatch(patch, useBefore: undo)
         }
     }
 
@@ -1450,6 +1514,324 @@ extension EditorViewModel {
 
     /// Below this drag size a text placement is treated as a click (auto-width).
     private var minTextDragPx: CGFloat { scene.canvas.px(fromPoints: 8) }
+}
+
+// MARK: - Eraser & raster editing (M6)
+
+/// The three eraser behaviors, cycled by Shift+E.
+///
+/// `object` deletes whole objects the stroke touches; `vector` clips the swept
+/// region out of touched objects (partial erase, non-destructive); `pixel`
+/// clears pixels on a raster layer. Pixel erase falls back to object erase when
+/// the active layer holds no pixels, so the eraser always does something.
+enum EraserMode: String, CaseIterable, Sendable {
+    case object, vector, pixel
+
+    var next: EraserMode {
+        let all = Self.allCases
+        return all[(all.firstIndex(of: self)! + 1) % all.count]
+    }
+
+    var displayName: String {
+        switch self {
+        case .object: return "Erase Objects"
+        case .vector: return "Erase (Partial)"
+        case .pixel: return "Erase Pixels"
+        }
+    }
+}
+
+/// The eraser and the raster-layer edit path. Kept in this file (not a separate
+/// extension) so it can drive the file-private `scene` / `history` / `surfaces`,
+/// exactly like the redaction and text lifecycles.
+extension EditorViewModel {
+    func cycleEraserMode() { eraserMode = eraserMode.next }
+
+    /// Dispatch a completed eraser stroke. No history bracket was opened at
+    /// stroke start, so each branch records its own single entry (or nothing).
+    func commitEraserStroke(_ payload: StrokePayload) {
+        let points = payload.samples.map(\.point)
+        let radius = max(payload.brush.sizePx / 2, 1)
+        switch eraserMode {
+        case .object: commitObjectErase(points: points, radius: radius)
+        case .vector: commitVectorErase(points: points, radius: radius)
+        case .pixel: commitPixelErase(points: points, radius: radius)
+        }
+        interaction = .idle
+    }
+
+    /// The eraser's swept region as a filled outline (constant width, round caps).
+    private func eraserOutline(points: [CGPoint], radius: CGFloat) -> [CGPoint] {
+        Freehand.outline(points.map { Freehand.InputPoint(point: $0, pressure: 1) },
+                         options: Freehand.Options(size: radius * 2, thinning: 0,
+                                                   smoothing: 0.35, simulatePressure: false))
+    }
+
+    // MARK: Object erase
+
+    private func commitObjectErase(points: [CGPoint], radius: CGFloat) {
+        var hits = Set<UUID>()
+        for layer in scene.layers where layer.isEditable && layer.isVector {
+            for object in layer.objects where !object.isLocked && !object.isHidden {
+                if points.contains(where: { object.hitTest($0, tolerance: radius) }) {
+                    hits.insert(object.id)
+                }
+            }
+        }
+        guard !hits.isEmpty else { return }
+        let before = scene
+        scene.removeObjects(ids: hits)
+        selection.objectIDs.subtract(hits)
+        if history.record(from: before, to: scene, name: "Erase") { onChange?(.done) }
+        pruneSurfaces()
+    }
+
+    // MARK: Partial-vector erase
+
+    private func commitVectorErase(points: [CGPoint], radius: CGFloat) {
+        let outline = eraserOutline(points: points, radius: radius)
+        guard outline.count >= 3 else { return }
+        let sweptBounds = CGRect(containing: outline)
+        let before = scene
+        var changed = false
+        for layer in scene.layers where layer.isEditable && layer.isVector {
+            for object in layer.objects where !object.isLocked && !object.isHidden {
+                guard object.renderBounds.intersects(sweptBounds),
+                      points.contains(where: { object.hitTest($0, tolerance: radius) })
+                else { continue }
+                scene.withObject(object.id) { $0.addErasedPolygon(outline) }
+                changed = true
+            }
+        }
+        guard changed else { return }
+        if history.record(from: before, to: scene, name: "Erase") { onChange?(.done) }
+    }
+
+    // MARK: Pixel erase (raster)
+
+    private func commitPixelErase(points: [CGPoint], radius: CGFloat) {
+        guard let i = scene.activeLayerIndex, scene.layers[i].isEditable,
+              case .raster(let currentID) = scene.layers[i].content,
+              let current = surfaces.image(currentID) else {
+            // No raster target: still erase something rather than doing nothing.
+            commitObjectErase(points: points, radius: radius)
+            return
+        }
+        let outline = eraserOutline(points: points, radius: radius)
+        guard outline.count >= 3,
+              let after = RasterOps.erase(current, polygon: outline, canvas: scene.canvas)
+        else { return }
+        let dirty = RasterPatch.quantize(CGRect(containing: outline).insetBy(dx: -1, dy: -1),
+                                         in: scene.canvas.pageRect)
+        guard !dirty.isNull, dirty.width >= 1, dirty.height >= 1 else { return }
+        commitRasterMutation(layerIndex: i, before: current, after: after,
+                             dirty: dirty, name: "Erase")
+    }
+
+    // MARK: Raster patch commit + apply
+
+    /// Turn a whole-surface before/after into a tile-quantized `RasterPatch`.
+    ///
+    /// The patch stores only MATERIALIZED tile crops (invariant 6), never the
+    /// full surfaces and never `cropping(to:)` — that is the entire reason a
+    /// long raster session stays under budget. The layer adopts the new full
+    /// surface; the old one is dropped by `pruneSurfaces`.
+    func commitRasterMutation(layerIndex i: Int, before current: CGImage,
+                              after newFull: CGImage, dirty: CGRect, name: String) {
+        guard i < scene.layers.count,
+              let beforeTile = RasterOps.materialize(current, cropTo: dirty, canvas: scene.canvas),
+              let afterTile = RasterOps.materialize(newFull, cropTo: dirty, canvas: scene.canvas)
+        else { return }
+
+        let beforeID = surfaces.register(beforeTile)
+        let afterID = surfaces.register(afterTile)
+        let newFullID = surfaces.register(newFull)
+        let layerID = scene.layers[i].id
+        scene.withLayer(layerID) { $0.content = .raster(newFullID) }
+
+        let bytes = beforeTile.height * beforeTile.bytesPerRow
+            + afterTile.height * afterTile.bytesPerRow
+        history.push(.rasterPatch(RasterPatch(layerID: layerID, rect: dirty,
+                                              before: beforeID, after: afterID,
+                                              byteCount: bytes), name: name))
+        onChange?(.done)
+        pruneSurfaces()
+    }
+
+    /// Composite a patch's tile back into the layer's live surface. On undo the
+    /// `before` tile, on redo the `after` tile — outside the tile the two
+    /// surfaces are identical, so replacing just the tile restores exactly.
+    private func applyRasterPatch(_ patch: RasterPatch, useBefore: Bool) {
+        guard let i = scene.index(of: patch.layerID),
+              case .raster(let currentID) = scene.layers[i].content,
+              let currentFull = surfaces.image(currentID),
+              let tile = surfaces.image(useBefore ? patch.before : patch.after),
+              let restored = RasterOps.compositeTile(tile, into: currentFull,
+                                                     at: patch.rect, canvas: scene.canvas)
+        else { return }
+        let newID = surfaces.register(restored)
+        scene.withLayer(patch.layerID) { $0.content = .raster(newID) }
+        pruneSurfaces()
+    }
+}
+
+// MARK: - Layers (M6)
+
+/// The layer stack API the layers panel drives. Every mutation is one named
+/// history entry (opacity coalesces its slider drag). Rasterize / merge / flatten
+/// route content through the ONE `RasterOps` renderer, so a baked layer matches
+/// its on-screen look exactly, and register their result in `SurfaceStore`.
+///
+/// Same-file, like the other lifecycles: it needs the file-private `scene`,
+/// `history`, `pruneSurfaces`, and `freshCopy`.
+extension EditorViewModel {
+    var layers: [Layer] { scene.layers }
+    var activeLayerID: Layer.ID { scene.activeLayerID }
+    var activeLayer: Layer? { scene.activeLayer }
+    var canMergeDown: Bool { (scene.activeLayerIndex ?? 0) > 0 }
+
+    private func nextLayerName() -> String { "Layer \(scene.layers.count + 1)" }
+
+    func setActiveLayer(_ id: Layer.ID) {
+        guard canMutateHistory, scene.activeLayerID != id else { return }
+        scene.activeLayerID = id
+    }
+
+    func addVectorLayer() { addLayer(.vector(named: nextLayerName())) }
+
+    func addRasterLayer() {
+        guard let blank = RasterOps.blank(scene.canvas) else { return }
+        addLayer(Layer(name: nextLayerName(), content: .raster(surfaces.register(blank))))
+    }
+
+    private func addLayer(_ layer: Layer) {
+        guard canMutateHistory else { return }
+        let before = scene
+        scene.insertLayer(layer, above: scene.activeLayerID)
+        if history.record(from: before, to: scene, name: "New Layer") { onChange?(.done) }
+    }
+
+    func duplicateActiveLayer() {
+        guard canMutateHistory, let src = scene.activeLayer else { return }
+        let before = scene
+        var copy: Layer
+        switch src.content {
+        case .raster(let id):
+            // Surfaces are immutable, so both layers can share the same handle —
+            // prune keeps it while either references it.
+            copy = Layer(name: src.name + " copy", content: .raster(id))
+        case .vector(let objects):
+            var remap: [UUID: UUID] = [:]
+            let fresh = objects.map { freshCopy(of: $0, offset: .zero, groupRemap: &remap) }
+            copy = Layer(name: src.name + " copy", content: .vector(fresh))
+        }
+        copy.opacity = src.opacity
+        copy.blend = src.blend
+        copy.isVisible = src.isVisible
+        copy.isLocked = src.isLocked
+        scene.insertLayer(copy, above: src.id)
+        if history.record(from: before, to: scene, name: "Duplicate Layer") { onChange?(.done) }
+    }
+
+    func deleteActiveLayer() {
+        guard canMutateHistory, scene.layers.count > 1 else { return }
+        let before = scene
+        scene.removeLayer(scene.activeLayerID)
+        selection.objectIDs.formIntersection(Set(scene.allObjects.map(\.id)))
+        if history.record(from: before, to: scene, name: "Delete Layer") { onChange?(.done) }
+        pruneSurfaces()
+    }
+
+    /// Bake a vector layer's objects into a single raster surface, keeping the
+    /// layer's own opacity and blend.
+    func rasterizeActiveLayer() {
+        guard canMutateHistory, let idx = scene.activeLayerIndex, scene.layers[idx].isVector,
+              let image = RasterOps.rasterizeContent(of: scene.layers[idx], in: scene,
+                                                     surfaces: surfaces) else { return }
+        let before = scene
+        let id = surfaces.register(image)
+        scene.withLayer(scene.layers[idx].id) { $0.content = .raster(id) }
+        selection.objectIDs.formIntersection(Set(scene.allObjects.map(\.id)))
+        if history.record(from: before, to: scene, name: "Rasterize Layer") { onChange?(.done) }
+        pruneSurfaces()
+    }
+
+    /// Merge the active layer into the one below it, compositing both with their
+    /// opacity and blend into one raster layer.
+    func mergeDownActiveLayer() {
+        guard canMutateHistory, let idx = scene.activeLayerIndex, idx > 0,
+              let image = RasterOps.flatten([scene.layers[idx - 1], scene.layers[idx]],
+                                            in: scene, surfaces: surfaces) else { return }
+        let before = scene
+        let name = scene.layers[idx - 1].name
+        let merged = Layer(name: name, content: .raster(surfaces.register(image)))
+        scene.layers.replaceSubrange((idx - 1)...idx, with: [merged])
+        scene.activeLayerID = merged.id
+        selection.objectIDs.formIntersection(Set(scene.allObjects.map(\.id)))
+        if history.record(from: before, to: scene, name: "Merge Down") { onChange?(.done) }
+        pruneSurfaces()
+    }
+
+    /// Collapse every layer into one raster layer.
+    func flattenImage() {
+        guard canMutateHistory, scene.layers.count > 1,
+              let image = RasterOps.flatten(scene.layers, in: scene,
+                                            surfaces: surfaces) else { return }
+        let before = scene
+        let flat = Layer(name: "Flattened", content: .raster(surfaces.register(image)))
+        scene.layers = [flat]
+        scene.activeLayerID = flat.id
+        selection.clear()
+        if history.record(from: before, to: scene, name: "Flatten Image") { onChange?(.done) }
+        pruneSurfaces()
+    }
+
+    // MARK: Layer properties
+
+    func setLayerVisible(_ id: Layer.ID, _ visible: Bool) {
+        recordLayerEdit("Layer Visibility", id) { $0.isVisible = visible }
+    }
+    func setLayerLocked(_ id: Layer.ID, _ locked: Bool) {
+        recordLayerEdit("Layer Lock", id) { $0.isLocked = locked }
+    }
+    func setLayerName(_ id: Layer.ID, _ name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        recordLayerEdit("Rename Layer", id) { $0.name = trimmed }
+    }
+    func setLayerBlend(_ id: Layer.ID, _ blend: CGBlendMode) {
+        recordLayerEdit("Blend Mode", id) { $0.blend = blend }
+    }
+
+    private func recordLayerEdit(_ name: String, _ id: Layer.ID,
+                                 _ body: (inout Layer) -> Void) {
+        guard canMutateHistory else { return }
+        let before = scene
+        scene.withLayer(id, body)
+        if history.record(from: before, to: scene, name: name) { onChange?(.done) }
+    }
+
+    /// Opacity is a slider: its drag coalesces into one entry.
+    func setLayerOpacity(_ id: Layer.ID, _ opacity: CGFloat) {
+        scene.withLayer(id) { $0.opacity = min(max(opacity, 0), 1) }
+    }
+    func beginLayerOpacityEdit() { history.beginInteractive(scene) }
+    func endLayerOpacityEdit() {
+        if history.endInteractive(scene, name: "Layer Opacity") { onChange?(.done) }
+    }
+
+    // MARK: Reorder
+
+    func raiseActiveLayer() { swapActive(by: 1) }
+    func lowerActiveLayer() { swapActive(by: -1) }
+
+    private func swapActive(by delta: Int) {
+        guard canMutateHistory, let idx = scene.activeLayerIndex,
+              scene.layers.indices.contains(idx + delta) else { return }
+        let before = scene
+        scene.layers.swapAt(idx, idx + delta)
+        if history.record(from: before, to: scene, name: "Reorder Layer") { onChange?(.done) }
+    }
 }
 
 /// How the redact tool obscures its region.

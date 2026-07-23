@@ -18,22 +18,25 @@ project**. Built in numbered milestones (M1–M8 = v1); each milestone stays run
 **Where it stands (2026-07-22):** M1 done, **M2 ~90% done**, **M3 core complete**
 (shapes, multi-select, handles, clipboard, arrange), **M4 core complete** (color
 system, eyedropper, blur/pixelate redaction, style inspector), **M5 core complete**
-(multiline text: placement, the `NSTextView` editing sink, CoreText live render,
-styling, font panel, rotated-box editing). The app builds warning-clean, launches
-to a blank canvas you can draw on, and has **108 unit tests + 25 pixel assertions
-all green**. The single biggest open question — can SwiftUI `Canvas` hold frame
-rate — has been **answered and resolved** (§7): the render cache is mandatory and
-it works. Nothing is blocked.
+(multiline text), **M6 core complete** (raster layers + `SurfaceStore` carrying
+real pixels, a perfect-freehand brush engine with six presets and a 1€ stabilizer,
+three eraser modes, a layers panel, and **tile-quantized raster undo proven under
+budget — T1 answered**). The app builds warning-clean, launches to a blank canvas
+you can draw on, and has **139 unit tests + 25 pixel assertions all green**. The
+single biggest open question — can SwiftUI `Canvas` hold frame rate — has been
+**answered and resolved** (§7): the render cache is mandatory and it works. The
+second — can raster undo stay under budget — is now **answered too** (§1 M6, the
+T1 memory test). Nothing is blocked.
 
-**M1–M5 are committed** on `main`; the working tree is clean. Next work is
-**M6 (raster layers, brush engine, layers panel, raster undo)**. Commit when the
-user asks (don't commit unprompted).
+**M1–M6 are committed** on `main`; the working tree is clean. Next work is
+**M7 (regions: select, move, copy, paste, bucket, wand)** — the floating-selection
+subsystem. Commit when the user asks (don't commit unprompted).
 
 ### Resume in 60 seconds
 
 ```sh
 cd /Users/phamqm/Projects/sketcher
-make test      # 108 tests — must be green before you touch anything
+make test      # 139 tests — must be green before you touch anything
 make verify    # 25 pixel assertions through the real export pipeline
 make run       # launches dist/Sketcher.app — draw a stroke to sanity-check
 .build/release/Sketcher --perf   # re-run the perf gate if you touch rendering
@@ -42,17 +45,26 @@ make run       # launches dist/Sketcher.app — draw a stroke to sanity-check
 Read order for a new agent: this section → §8 (file map) → `CLAUDE.md` (the 15
 invariants) → §2 (decisions) → §3/§4 (traps + bugs) before editing.
 
-### What to do next (M6, plus small tails)
+### What to do next (M7, plus small tails)
 
-**M3, M4, and M5 core are done** (see their subsections in §1). Next milestone is
-**M6 — raster layers, brush engine, erasers, layers panel, raster undo**: the
-`.raster(SurfaceID)` layer type wired end-to-end, a perfect-freehand port for
-pressure/velocity strokes, three eraser modes, a layers panel, and **tile-quantized
-raster undo proven under a byte budget** (T1 — the project-killer memory trap;
-`SurfaceStore.totalBytes` is already the probe). This is where `SurfaceStore` and
-the `RasterPatch` history entry finally carry real pixels.
+**M3–M6 core are done** (see their subsections in §1). Next milestone is
+**M7 — regions: select, move, copy, paste, bucket, wand**: the floating-selection
+subsystem (lift → transform → drop as one undo entry), rect/ellipse/lasso/wand
+with the five combine modes, animated marching ants (hand-written marching squares
+for wand masks — T3), raster flood fill, and Rasterize Selection. **Spike the
+`CGPath`-boolean figure-eight case in week one** (Risk 2) before the architecture
+commits. `SurfaceStore` + the `RasterPatch` lifecycle from M6 are the foundation it
+builds on, and `commitRasterMutation` is the pattern flood-fill/lift reuse.
 
 **Small tails to mop up when convenient:**
+- **M6 tails** (none blocking): the pixel eraser targets the active raster layer;
+  on a vector layer it FALLS BACK to object-erase rather than prompting
+  "Rasterize?" (D38 — no modal, but you must Rasterize Layer explicitly to paint
+  pixels on a vector layer). The brush stabilizer bakes 1€-filtered points into the
+  stored samples, so `streamline` is not re-editable after the fact (size/thinning
+  still are — D34). No layer thumbnails in the panel yet; reorder is buttons
+  (Raise/Lower), not drag. Calligraphy fakes a nib via per-sample pressure, not a
+  true directional radius (D35).
 - **M5 tails** (none blocking): while the text field editor is first responder,
   `⌘C/⌘X/⌘V/⌘A` are DISABLED (they'd otherwise paste objects onto the edit), so
   in-field text clipboard + select-all are deferred — the proper fix is
@@ -68,8 +80,8 @@ the `RasterPatch` history entry finally carry real pixels.
 - **M4 tails** (none blocking): inspector has no shadow/arrowhead/blend controls
   yet; the color UI has swatches + 8 recents but no shades-popover or hex field;
   non-destructive `.filter` objects are M9 (M4's blur is the destructive redaction).
-- **M3 deferrals**: object-eraser *tool* and group *rotate* (M6 / general affine);
-  non-polygon library shapes; align/distribute keyboard shortcuts.
+- **M3 deferrals**: group *rotate* (general affine); non-polygon library shapes;
+  align/distribute keyboard shortcuts. (Object-eraser tool: **done in M6.**)
 
 ### Gotchas that will waste your time if you don't know them
 
@@ -99,7 +111,7 @@ Legend: ☐ not started · ◐ in progress · ☑ done & verified
 | M3 | Shapes, multi-select, handles, clipboard, arrange | ◐ | 75 tests; core done, deferrals below |
 | M4 | Color system, style inspector, blur redaction | ◐ | 89 tests; core done, tails below |
 | M5 | Multiline text | ◐ | 108 tests + text pixel fixture; core done, tails below |
-| M6 | Raster layers, brush engine, erasers, layers panel, raster undo | ☐ | |
+| M6 | Raster layers, brush engine, erasers, layers panel, raster undo | ◐ | 139 tests (T1 memory proven); core done, tails below |
 | M7 | Regions: select, move, copy, paste, bucket, wand | ☐ | |
 | M8 | Persistence, canvas ops, export formats — **v1 ships here** | ☐ | |
 | M9–M11 | Appendix: filters, gradients, snapping, polish | ☐ | decided after M8 |
@@ -261,6 +273,51 @@ select-all inside an edit are deferred to first-responder-routed menu items, D33
 and **unverified on a device**; font-panel underline/color effects aren't wired
 (`⌘U` is).
 
+### M6 — core complete (2026-07-22)
+
+Delivered and tested (31 new tests: `BrushRasterTests.swift`, `RasterLayerTests.swift`):
+
+- [x] **Brush engine — a perfect-freehand port** (`Model/Brush/Freehand.swift`).
+  Samples → a FILLED variable-width outline polygon (CGContext has no variable-width
+  stroke, so pressure REQUIRES a filled outline, not a stroked centerline). Pure and
+  deterministic; `size`/`thinning` re-render losslessly. `StrokeGeometry.fill` fills
+  it as ONE op so the highlighter's `.multiply` never double-darkens (T12).
+- [x] **Six presets + Shift+B cycle** (`Model/Brush/BrushEngine.swift`): pen (clean
+  constant), pressure, pencil (taper), highlighter (3× wide, multiply), calligraphy
+  (nib faked by per-sample directional pressure — D35), marker. One switch, so
+  render + hit-test + export agree on width.
+- [x] **The stabilizer — a 1€ filter** (`Model/Brush/OneEuroFilter.swift`, D34).
+  Runs at capture time: raw points in, smoothed points stored. Adaptive cutoff, so
+  slow tremor is killed without lagging fast motion. `brush.streamline` drives it.
+- [x] **Raster layers carry real pixels.** `SurfaceStore` (built empty in M1) now
+  holds live surfaces. New raster layer, rasterize a vector layer, merge down,
+  flatten — all route content through the ONE `SceneRenderer` via `RasterOps`
+  (`Raster/RasterOps.swift`, nonisolated, invariant 11), so a baked layer cannot
+  drift from its on-screen look.
+- [x] **Tile-quantized raster undo — T1 answered.** A pixel edit stores a
+  `RasterPatch` of MATERIALIZED 128-px tile crops (never `cropping(to:)`, which
+  pins the whole canvas — the project-killer). `commitRasterMutation` builds the
+  patch; `applyRasterPatch` composites the `before` tile on undo / `after` on redo.
+  **Proven by the memory test**: 40 pixel-erase strokes stay under 30 MB (storing
+  full surfaces would be ~80 MB), and one patch's two tiles together are smaller
+  than a full canvas. A `.scene` entry in a 5-raster-layer doc is still kilobytes.
+- [x] **Three eraser modes + Shift+E cycle** (`EraserMode`): object (delete touched
+  objects), partial-vector (clip the swept outline out of `erasedGeometry`), pixel
+  (clear alpha on a raster layer → a `RasterPatch`). Pixel erase on a transparent
+  canvas yields **alpha 0, never white** (T15). **Overlapping partial erasures stay
+  erased in the overlap** — the renderer punches each subpath as its own hole so a
+  single even-odd union can't un-erase the crossing (T16-adjacent, D36).
+- [x] **Layers panel** (`Views/LayersPanel.swift`) in the sidebar: per-layer
+  visibility / lock / rename, active highlight, opacity (coalesced slider) + blend
+  picker, and new-vector / new-raster / duplicate / merge / delete / raise / lower /
+  rasterize. A new **Layer** menu + `⌘⌥N` / `⌘⌥⇧N` / `⌘E` / `⌘⌥E`, and an anti-alias
+  toggle in **View** (pixel-art mode).
+
+Tails (none blocking, in §0's "what to do next"): pixel erase on a vector layer
+falls back to object-erase (no "Rasterize?" modal — D38); `streamline` bakes into
+stored samples (D34); no layer thumbnails, reorder is buttons not drag; calligraphy
+is a faked nib (D35).
+
 ---
 
 ## 2. Technical design decisions
@@ -303,6 +360,12 @@ this list rather than quietly reversing an entry.
 | D31 | **The sink is a CHILD of `CanvasEventView`, not a sibling SwiftUI layer** | Clicks INSIDE it position the caret; clicks OUTSIDE reach the parent's `mouseDown`, which resigns it → commit. `CanvasEventLayer` carries `editingTextID`/`sceneRevision`/`transform` so SwiftUI re-runs `updateNSView` (→ `syncTextEditing`) exactly when the sink must appear, resize (auto-width growth, zoom), or tear down. The sink's font/paragraph are configured only on an attribute-signature change, so a keystroke never resets it mid-IME. |
 | D32 | **A rotated text box un-rotates to 0° in the scene for editing, re-rotating on commit** | Caret and IME geometry are wrong under a rotated parent, and an axis-aligned overlay is far simpler than a rotated `NSView`. The pre-edit angle is held on `editingOriginalRotation`; net rotation change is zero, so an unchanged edit still pushes no entry. |
 | D33 | **While the field editor is first responder, object-editing ⌘-keys (`⌘C/⌘X/⌘V/⌘A`/Delete/Duplicate) are DISABLED**, not re-routed | Their key equivalents would otherwise paste objects onto the text being typed. Disabling them (via `validateMenuItem`) is safe and non-destructive; the proper fix — first-responder-routed `cut:`/`copy:`/`paste:` menu items so the field editor owns them — is deferred rather than risk regressing M3's object clipboard, which is unit-tested but whose responder-chain routing is not. |
+| D34 | **Stabilization is a 1€ filter at CAPTURE time (`OneEuroFilter`), separate from `Freehand`'s render-time geometry** | Upstream perfect-freehand folds `streamline` into the outline pass; this port splits it. Jitter is a property of the input device (fix it once, live), geometry is a property of the mark (derive it losslessly from stored samples). Consequence: `streamline` bakes into the stored points, so it is NOT re-editable after the fact — but `size`/`thinning` still re-render losslessly, which is what the invariant actually promises. A single stabilizer also means the two never fight over the same knob. |
+| D35 | **Calligraphy fakes a nib via per-sample directional pressure**, not a true directional radius | `Freehand.Options` has one scalar width curve, no per-sample radius vector. `BrushEngine.inputPoints` sets each sample's pressure to `|sin(travel − nibAngle)|` (floored at 0.18) and runs the engine with `thinning` high, `simulatePressure` off — thick across the nib, thin along it. Good enough to read as calligraphy; a real angled-nib stamp is a later refinement. |
+| D36 | **`erasedGeometry` is clipped subpath-by-subpath (sequential clips intersect), NOT as one even-odd union** | Two overlapping eraser strokes both cover the crossing → winding 2 → a single even-odd hole reads it as OUTSIDE the hole and UN-erases it (T16). Punching each subpath as its own `(hugeRect + subpath)` even-odd hole and letting the sequential clips intersect subtracts the true union. `hitTest` mirrors it (a point inside ANY subpath is erased). This also fixes the same latent bug for overlapping M4 redaction rects. |
+| D37 | **A pixel edit is a `RasterPatch` (tile diff), NOT a `.scene` snapshot** | Setting a layer's `SurfaceID` to a new full surface DOES change `Scene`, so `history.end` would push a `.scene` entry — but that entry's surface must be retained, so 50 raster strokes would pin 50 full canvases (~800 MB). The eraser therefore opens NO gesture bracket; `commitRasterMutation` pushes a `RasterPatch` of materialized tile crops instead, and `pruneSurfaces` drops the superseded full surface. This is the whole reason `HistoryEntry` is heterogeneous. |
+| D38 | **Pixel erase on a vector layer falls back to object-erase; it does NOT prompt "Rasterize layer?"** | The plan's routing table says prompt, but "lightweight = no modal dialogs" (Risk 7) wins. The eraser always does something sensible (delete the objects it sweeps); to paint pixels on a vector layer you run **Rasterize Layer** explicitly first. Keeps the eraser non-blocking and the seam predictable. |
+| D39 | **Rasterize / merge / flatten build a throwaway `Scene` (transparent background) and draw it through `SceneRenderer`** | Reuses the ONE renderer (invariant 2) instead of a second bake path, so a rasterized layer is pixel-identical to its live look. The canvas background is a canvas property, not a layer, so it is deliberately NOT baked in — a transparent-canvas doc stays transparent after Flatten. Off-page content is clipped, because a surface is exactly page-sized (answers the M6 open question below). |
 
 ### Rejected, with reasons
 
@@ -340,8 +403,8 @@ a test that catches it; if you touch the area, keep the test.
 | T12 | Stroking a polyline segment-by-segment | Highlighter double-darkens at every joint | One path, **one** stroke op, `.multiply` blend. |
 | T13 | Round line caps do not render a zero-length line | A click without a drag draws nothing | Single point → filled ellipse. |
 | T14 | `NSTextView` laying out while CoreText renders | Visible reflow pop at commit (TextKit 2 and `CTFramesetter` disagree on line breaking) | Use `NSTextView` purely as an IME sink with its own drawing disabled. |
-| T15 | `.destinationOut` on an opaque context | Eraser paints white instead of clearing to alpha 0 | Raster layers are always premultiplied-with-alpha. |
-| T16 | Even-odd clip for accumulated eraser strokes | Overlapping eraser strokes **un-erase** in the overlap | `CGPath.subtracting` (native, macOS 13+). |
+| T15 | `.destinationOut` on an opaque context | Eraser paints white instead of clearing to alpha 0 | **M6:** `RasterOps.erase` clears with `.clear` blend on the always-premultiplied canvas context; asserted by `eraseIsTransparentNotWhite`. |
+| T16 | Even-odd clip for accumulated eraser strokes | Overlapping eraser strokes **un-erase** in the overlap | **M6 (D36):** punch each `erasedGeometry` subpath as its own even-odd hole; sequential clips intersect. (Chose this over `CGPath.subtracting` — no path-flattening step needed.) Asserted by `overlappingVectorErase`. |
 | T17 | `NSDocumentClass` under SwiftPM module mangling | Document class fails to resolve at launch | `@objc(SketchDocument)`. |
 
 ---
@@ -403,8 +466,8 @@ Things deliberately deferred. Not bugs — decisions with a "not yet" attached.
 - ~~**Perf gate (M2)**~~ — **ANSWERED, see §7.**
 - **Per-document color space** — sRGB is hardcoded as the default; `colorSpaceName` already exists in `CanvasSpec`, so exposing P3 in the New Canvas sheet is additive whenever it is wanted.
 - **Editable PNG (`skTc` chunk)** — convenience round-trip only. Any third-party re-save or optimizer strips it; must be surfaced in the UI, never presented as the canonical format.
-- **Infinite mode + raster layers** — a raster layer is bounded by the page rect. Painting outside the page in infinite mode is currently undefined; decide at M6 whether raster layers grow, clip, or refuse.
-- **Layer count cap** — 16 is the planned ceiling for memory reasons. Revisit once real documents exist.
+- ~~**Infinite mode + raster layers**~~ — **DECIDED at M6 (D39): a raster surface is exactly page-sized, so raster content is CLIPPED to the page.** Rasterize/flatten in infinite mode drop off-page content. If growing raster layers is ever wanted, it rides on the M8 canvas-resize path (Trim to Content / Canvas Size), not on the raster op.
+- **Layer count cap** — 16 is the planned ceiling for memory reasons. Not yet enforced (M6 adds unbounded new-layer). Revisit once real documents exist; the cap belongs on `addLayer`.
 
 ---
 
@@ -456,7 +519,7 @@ path (the common case) costs as much as the render it was meant to avoid.
 
 ## 8. Architecture / file map
 
-52 source files, ~8.3k lines; 7 test files, ~2.0k lines. Layered strictly:
+58 source files, ~9.6k lines; 9 test files, ~2.5k lines. Layered strictly:
 **Model → Rendering → ViewModel → Input/Views/App**. The dependency arrow never
 points backwards — Model knows nothing of AppKit, and nothing below the view
 layer knows about points or zoom (invariant 1).
@@ -475,29 +538,37 @@ layer knows about points or zoom (invariant 1).
 | `CanvasTransform.swift` | **The ONLY pixel↔view conversion site** (invariant 1). `toView`/`toCanvas`/`canvasTolerance`/`zoom(by:about:)`/`fit`/`actualSize`. |
 | `ObjectStyle.swift` | `ObjectStyle`, `RGBAColor`, `Fill`, `DashStyle`, `ShadowSpec`. |
 | `Selection.swift` | `Selection` (multi-select `Set<UUID>` + pixel region), `SelectionShape`, `FloatingPixels`, `LiftMode`. **Object multi-select wired (M3); pixel region ops are M7.** |
-| `SurfaceStore.swift` | Lock-guarded `@unchecked Sendable` refcounted CGImage table. `totalBytes` is the M6 memory-budget probe. |
+| `SurfaceStore.swift` | Lock-guarded `@unchecked Sendable` refcounted CGImage table. **Carries live raster pixels from M6.** `totalBytes` is the memory-budget probe (T1); `prune(keeping:)` GCs by scene+history reference, not refcount. |
 | `PixelFormat.swift` | The one canonical pixel layout (BGRA premultiplied) + `makeContext` (handled-failure allocation) + `unpremultiply`. |
 | `Tool.swift` | `Tool` enum + display names, SF Symbols, drag-behavior flags. |
+| `Brush/Freehand.swift` | **(M6)** Perfect-freehand port: samples → a filled variable-width outline polygon. Pure, deterministic; the reason strokes are stored as samples, not paths. |
+| `Brush/OneEuroFilter.swift` | **(M6)** The 1€ stabilizer (D34) — adaptive low-pass at capture time; `forStreamline` maps `brush.streamline` onto its cutoff/beta. |
+| `Brush/BrushEngine.swift` | **(M6)** Six presets → `Freehand.Options`, plus the calligraphy nib fake (D35) and the Shift+B cycle order. One switch for render/hit-test/export. |
 
 ### Rendering — nonisolated (`Sources/Sketcher/Rendering/`)
 | File | Purpose |
 | --- | --- |
-| `SceneRenderer.swift` | **The single draw routine** (invariant 2) for screen + export + cache. `drawImageYDown` (a y-flip site). Layer loop with isolated-offscreen compositing. |
+| `SceneRenderer.swift` | **The single draw routine** (invariant 2) for screen + export + cache. `drawImageYDown` (a y-flip site). Layer loop with isolated-offscreen compositing; raster layers blit their surface. Strokes fill the `BrushEngine` outline; `erasedGeometry` is punched subpath-by-subpath (D36). |
 | `RenderCaches.swift` | Committed/live split. `committedImage(...)` rebuilds only on key change; `rebuildCount` is asserted by tests. |
 | `ExportService.swift` | `renderFullResolution` / `renderRegion` / `renderObjects` (selection-only, for the clipboard image) + `pngData`. The export y-flip site. |
 | `ObjectPaths.swift` | Pure `CGPath` construction shared by render + hit test (roundedRect, polygon/star, quad) and `ArrowGeometry` (shaft pullback + head shapes). |
-| `StrokeGeometry.swift` | Midpoint-quadratic smoothing + one-op polyline stroke (single point → filled ellipse). **M6 replaces the outline with a perfect-freehand port.** |
+| `StrokeGeometry.swift` | The capture-time sample gate (`shouldAppend`) + `fill` — one non-zero-winding fill op for a `Freehand`/`BrushEngine` outline, so the highlighter's multiply never double-darkens (T12). (M6 moved the geometry into `Model/Brush/`.) |
 | `TextMetrics.swift` | CoreText measure/draw, 3-mode sizing. Screen == export by construction; the M5 editing overlay lives in `Text/` and never draws visible glyphs. |
 | `CIContextProvider.swift` | **(M4)** One shared `CIContext` (linear working space) for every filter — never one per application. |
 | `Redaction.swift` | **(M4)** Renders a region, blurs/pixelates it (halo-safe clamp+crop, anchored pixelate center), returns the opaque patch. |
 | `PixelSampling.swift` | **(M4)** `CGImage.firstPixelUnpremultiplied` — the eyedropper's readback (invariant 10). |
 
+### Raster — nonisolated (`Sources/Sketcher/Raster/`)
+| File | Purpose |
+| --- | --- |
+| `RasterOps.swift` | **(M6)** The pixel-op free functions (invariant 11): `rasterizeContent`/`flatten` (through the ONE renderer, D39), `erase` (`.clear`, T15), `blank`, `materialize` (fresh-context tile crop — the T1 fix, NEVER `cropping(to:)`), `compositeTile` (apply a patch tile). Every result is a new immutable surface. |
+
 ### ViewModel — `@MainActor` (`Sources/Sketcher/ViewModel/`)
 | File | Purpose |
 | --- | --- |
-| `EditorViewModel.swift` | The hub. Owns `scene` (with the `sceneRevision` didSet), `history`, `interaction`, `selection`, `transform`, tool + style. Pointer handlers, commit gating, undo/redo, viewport commands. **The M5 text-editing lifecycle** (begin/type/commit/cancel, un-rotate, style setters) lives here too — it mutates the file-private `scene`/`interaction`/`history` like redaction does. |
+| `EditorViewModel.swift` | The hub. Owns `scene` (with the `sceneRevision` didSet), `history`, `interaction`, `selection`, `transform`, tool + style, the live `OneEuroFilter`. Pointer handlers, commit gating, undo/redo, viewport commands. **The M5 text-editing, M6 eraser (3 modes), M6 raster-patch, and M6 layer lifecycles** all live here as same-file extensions — they mutate the file-private `scene`/`interaction`/`history`/`surfaces` like redaction does. `applyRasterPatch` composites tile diffs on undo/redo (D37). |
 | `Interaction.swift` | The editing state machine (`idle`/`drawing`/`draggingObjects`/`resizing`/`rotating`/`editingText`/`marquee`/`panning`). Pointer + key handlers are its transitions. `resizing`/`rotating` carry the pre-gesture originals (M3); `editingText` is a mutating gesture bracketing a whole text session (M5). |
-| `History.swift` | Snapshot undo. `begin`/`end` (push-only-if-changed), interactive-edit coalescing, `HistoryEntry` (scene | rasterPatch), `RasterPatch` (materialized, tile-quantized — T1), eviction budget. |
+| `History.swift` | Snapshot undo. `begin`/`end` (push-only-if-changed), interactive-edit coalescing, `HistoryEntry` (scene \| rasterPatch), `RasterPatch` (materialized, tile-quantized — T1; **carries real pixels from M6**), byte-budget eviction (raster patches evict first, `.scene` never). |
 
 ### Input — AppKit, `@MainActor` (`Sources/Sketcher/Input/`)
 | File | Purpose |
@@ -517,7 +588,8 @@ layer knows about points or zoom (invariant 1).
 | `CanvasView.swift` | The drawing surface: workspace backdrop, artboard chrome (hairline+shadow, checkerboard), the cached-vs-live draw split, selection chrome + handles, redaction-region preview. Input overlay on top. |
 | `ToolbarView.swift` | `ViewThatFits` 3-tier tool palette, shape picker, color wells + swap + swatch strip, size slider, background picker, undo/redo, zoom. Color⇄RGBAColor bridging lives here. |
 | `InspectorView.swift` | **(M4)** Trailing style panel: fill, stroke width, dash, corner radius, opacity. Edits the selection or the tool defaults; sliders coalesce to one undo entry. |
-| `EditorRootView.swift` | Toolbar / canvas / inspector / status-bar layout + the contained/infinite and inspector toggles. |
+| `LayersPanel.swift` | **(M6)** The layer stack (rows top→bottom): visibility/lock/rename per row, active highlight, opacity (coalesced) + blend picker, and new-vector/new-raster/duplicate/merge/delete/raise/lower/rasterize. Stacked under the inspector in the sidebar. |
+| `EditorRootView.swift` | Toolbar / canvas / inspector + layers / status-bar layout + the contained/infinite and inspector toggles. |
 
 ### App shell — AppKit, `@MainActor` (`Sources/Sketcher/App/`, `Document/`, `Windows/`, `Commands/`, `Pasteboard/`, `Export/`)
 | File | Purpose |
@@ -525,7 +597,8 @@ layer knows about points or zoom (invariant 1).
 | `main.swift` | Headless early-exit into `TestRenderMode` **before** `NSApplication` (what makes the pixel harness bare-binary runnable), then the normal app. |
 | `App/AppDelegate.swift` | Regular-app activation policy, builds the menu, opens the blank untitled canvas. |
 | `App/Command.swift` + `CommandDispatch.swift` | **One command enum, one dispatch switch** (invariant 13). Menu/keyboard/toolbar all route here. Edit (cut/copy/paste/duplicate) + Arrange commands added in M3. |
-| `App/MainMenu.swift` | Menu bar built from `Command`. Custom `performUndo:`/`performRedo:` (T8). **Arrange** menu (M3). |
+| `App/MainMenu.swift` | Menu bar built from `Command`. Custom `performUndo:`/`performRedo:` (T8). **Arrange** (M3), **Format** (M5), **Layer** (M6) menus. |
+| `Commands/LayerCommands.swift` | **(M6)** Pure `Scene` layer-stack edits (`insertLayer`/`removeLayer`/`moveLayer`); the view model brackets them and owns anything needing `SurfaceStore`. |
 | `Document/SketchDocument.swift` | `@objc(SketchDocument)` NSDocument (T17). read/write via `SceneCodec`, edited-dot wiring, `isRestorable = false`. |
 | `Windows/EditorWindowController.swift` | Hosts the SwiftUI view; `sizingOptions = [.minSize]`; the undo selectors. |
 | `Commands/ExportCommands.swift` | Copy-canvas, `Export…` via NSSavePanel, `dragOutURL` (not yet wired to a drag source). |
@@ -550,14 +623,16 @@ layer knows about points or zoom (invariant 1).
 | `scripts/bundle.sh` | Hand-assembles `dist/Sketcher.app`, ad-hoc signs, `plutil -lint`. |
 | `scripts/Info.plist` | Bundle id, document type. Comment marks the M8 flip to `LSTypeIsPackage`. |
 | `scripts/verify-render.{sh,swift}` + `make-fixture.swift` | The pixel-fidelity harness (21 assertions) + its fixtures. |
-| `Tests/SketcherTests/` | `GeometryTests`, `HistoryTests` (+ `EditorViewModelTests`), `CodecTests`, `RenderCacheTests` (+ `ExportTests`), `SelectionArrangeTests` (M3), `ColorRedactionTests` (M4), `TextEditingTests` (M5: placement, editing lifecycle, one-entry coalescing, rotation round-trip, styling, layout fidelity, codec round-trip). **108 tests.** |
+| `Tests/SketcherTests/` | `GeometryTests`, `HistoryTests` (+ `EditorViewModelTests`), `CodecTests`, `RenderCacheTests` (+ `ExportTests`), `SelectionArrangeTests` (M3), `ColorRedactionTests` (M4), `TextEditingTests` (M5), `BrushRasterTests` (M6: Freehand geometry, 1€ filter, brush presets), `RasterLayerTests` (M6: **T1 memory budget**, raster undo round-trip, layers, eraser modes, overlap-erase, opacity isolation). **139 tests.** |
 
 ### Not yet created (planned, per milestone)
-`Model/Brush/*` + `Raster/*` (M6) · `Model/Shapes/*` + `Grouping`/`HitTest`/`Handles`
-as separate files (M3 — currently inline) · `Tools/*` per-tool files (M3+) ·
-`Persistence/SceneFile`/`PackageIO` package format (M8) ·
-`Views/{CheckerboardView,ZoomControl,LayersPanel}` (inline or later). The current
+`Model/Shapes/*` + `Grouping`/`HitTest`/`Handles` as separate files (M3 — currently
+inline) · `Tools/*` per-tool files (the tools live in `EditorViewModel` extensions) ·
+`Persistence/SceneFile`/`PackageIO` package format (M8) · `Model/{SelectionShape,
+FloatingPixels}` fleshed out + `Raster/{FloodFill,MaskTrace,MaskOps}` + `Rendering/
+MarchingAnts` (M7) · `Views/{CheckerboardView,ZoomControl}` (inline). The current
 layout collapses several planned files into fewer; that is tracked in §1 and is not
-a problem to fix, just a note so the plan's file list isn't taken literally. (M5's
-`Text/*` was planned as five files; it landed as one `TextEditingOverlay.swift` plus
-the existing `TextMetrics.swift`, since `TextPayload` lives in `DrawObject.swift`.)
+a problem to fix, just a note so the plan's file list isn't taken literally. (M6's
+`Model/Brush/*` landed as three files as planned; `History+RasterPatch` folded into
+`EditorViewModel`/`History` for file-private access; `LayerCommands` is a pure
+`Scene` extension with the stateful half in the view model.)

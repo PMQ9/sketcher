@@ -223,6 +223,18 @@ final class CanvasEventView: NSView {
         switch character.lowercased() {
         case "x": viewModel.swapColors(); return
         case "d": viewModel.resetColors(); return
+        case "b":
+            // Shift+B cycles the brush preset; either way arm the brush.
+            if shift { viewModel.cycleBrushEngine() }
+            viewModel.tool = .brush
+            window?.invalidateCursorRects(for: self)
+            return
+        case "e":
+            // Shift+E cycles the eraser mode; either way arm the eraser.
+            if shift { viewModel.cycleEraserMode() }
+            viewModel.tool = .eraser
+            window?.invalidateCursorRects(for: self)
+            return
         case "i":
             if shift {
                 ColorCommands.pickScreenColor(viewModel)

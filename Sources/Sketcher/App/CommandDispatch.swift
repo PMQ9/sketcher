@@ -73,12 +73,23 @@ enum CommandDispatch {
             viewModel.setCanvasMode(
                 viewModel.scene.canvas.mode == .contained ? .infinite : .contained)
 
+        case .newLayer: viewModel.addVectorLayer()
+        case .newRasterLayer: viewModel.addRasterLayer()
+        case .duplicateLayer: viewModel.duplicateActiveLayer()
+        case .deleteLayer: viewModel.deleteActiveLayer()
+        case .mergeDown: viewModel.mergeDownActiveLayer()
+        case .flattenImage: viewModel.flattenImage()
+        case .rasterizeLayer: viewModel.rasterizeActiveLayer()
+        case .raiseLayer: viewModel.raiseActiveLayer()
+        case .lowerLayer: viewModel.lowerActiveLayer()
+
         case .zoomIn:
             viewModel.zoom(by: 1.25, about: viewModel.viewportCenter)
         case .zoomOut:
             viewModel.zoom(by: 1 / 1.25, about: viewModel.viewportCenter)
         case .zoomActualSize: viewModel.zoomToActualSize()
         case .zoomToFit: viewModel.zoomToFit()
+        case .toggleAntialias: viewModel.toggleAntialias()
 
         case .brushSizeDown: viewModel.adjustBrushSize(step: -1)
         case .brushSizeUp: viewModel.adjustBrushSize(step: 1)
@@ -105,6 +116,10 @@ enum CommandDispatch {
         case .fontPanel, .textBold, .textItalic, .textUnderline,
              .textAlignLeft, .textAlignCenter, .textAlignRight, .textPlate:
             return viewModel.hasEditableText
+        case .mergeDown: return viewModel.canMergeDown
+        case .deleteLayer: return viewModel.layers.count > 1
+        case .rasterizeLayer: return viewModel.activeLayer?.isVector ?? false
+        case .flattenImage: return viewModel.layers.count > 1
         default: return true
         }
     }

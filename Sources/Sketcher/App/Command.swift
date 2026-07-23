@@ -38,8 +38,13 @@ enum Command: String, CaseIterable, Sendable {
     case backgroundLight, backgroundDark, backgroundTransparent
     case toggleCanvasMode
 
+    // Layers
+    case newLayer, newRasterLayer, duplicateLayer, deleteLayer
+    case mergeDown, flattenImage, rasterizeLayer, raiseLayer, lowerLayer
+
     // View
     case zoomIn, zoomOut, zoomActualSize, zoomToFit
+    case toggleAntialias
 
     // Brush
     case brushSizeDown, brushSizeUp
@@ -100,10 +105,20 @@ enum Command: String, CaseIterable, Sendable {
         case .backgroundDark: return "Dark Canvas"
         case .backgroundTransparent: return "Transparent Canvas"
         case .toggleCanvasMode: return "Toggle Contained / Infinite"
+        case .newLayer: return "New Layer"
+        case .newRasterLayer: return "New Raster Layer"
+        case .duplicateLayer: return "Duplicate Layer"
+        case .deleteLayer: return "Delete Layer"
+        case .mergeDown: return "Merge Down"
+        case .flattenImage: return "Flatten Image"
+        case .rasterizeLayer: return "Rasterize Layer"
+        case .raiseLayer: return "Raise Layer"
+        case .lowerLayer: return "Lower Layer"
         case .zoomIn: return "Zoom In"
         case .zoomOut: return "Zoom Out"
         case .zoomActualSize: return "Actual Size"
         case .zoomToFit: return "Zoom to Fit"
+        case .toggleAntialias: return "Toggle Anti-aliasing"
         case .brushSizeDown: return "Decrease Brush Size"
         case .brushSizeUp: return "Increase Brush Size"
         }
@@ -130,6 +145,10 @@ enum Command: String, CaseIterable, Sendable {
         case .group: return ("g", [.command])
         case .ungroup: return ("g", [.command, .shift])
         case .toggleLock: return ("l", [.command, .shift])
+        case .newLayer: return ("n", [.command, .option])
+        case .duplicateLayer: return ("n", [.command, .option, .shift])
+        case .mergeDown: return ("e", [.command])
+        case .flattenImage: return ("e", [.command, .option])
         case .fontPanel: return ("t", [.command])
         case .textBold: return ("b", [.command])
         case .textItalic: return ("i", [.command])

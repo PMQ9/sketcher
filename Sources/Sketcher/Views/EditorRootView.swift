@@ -15,9 +15,13 @@ struct EditorRootView: View {
                     .frame(minWidth: 480, minHeight: 320)
                 if showInspector {
                     Divider()
-                    InspectorView(viewModel: viewModel)
-                        .frame(width: 216)
-                        .transition(.move(edge: .trailing))
+                    VStack(spacing: 0) {
+                        InspectorView(viewModel: viewModel)
+                        Divider()
+                        LayersPanel(viewModel: viewModel)
+                    }
+                    .frame(width: 216)
+                    .transition(.move(edge: .trailing))
                 }
             }
             Divider()

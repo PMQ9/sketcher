@@ -226,6 +226,19 @@ extension DrawObject {
         erasedGeometry = geometry
     }
 
+    /// Clip a world-space polygon (a partial-vector eraser stroke's outline) out
+    /// of this object. Like `addErasedRect`, the points are mapped into the
+    /// object's LOCAL frame so a rotated object erases where the pointer swept.
+    mutating func addErasedPolygon(_ worldPolygon: [CGPoint]) {
+        guard worldPolygon.count >= 3 else { return }
+        let local = (isRotatable && rotation != 0)
+            ? worldPolygon.map { $0.rotated(around: rotationCenter, by: -rotation) }
+            : worldPolygon
+        var geometry = erasedGeometry ?? PathGeometry(subpaths: [])
+        geometry.subpaths.append(local)
+        erasedGeometry = geometry
+    }
+
     /// Hit test in canvas pixels. Shapes hit on their BORDER BAND, not their
     /// interior, so an unfilled shape can be clicked through — unless it is
     /// filled, in which case the interior counts too.
@@ -236,10 +249,16 @@ extension DrawObject {
         let q = (isRotatable && rotation != 0)
             ? p.rotated(around: rotationCenter, by: -rotation) : p
 
-        // A point erased away is not a hit.
-        if let erased = erasedGeometry, !erased.isEmpty,
-           erased.makePath().contains(q, using: erased.evenOdd ? .evenOdd : .winding) {
-            return false
+        // A point erased away is not a hit. Test each subpath independently so a
+        // point in the overlap of two eraser strokes still reads as erased —
+        // matching how the renderer punches the holes.
+        if let erased = erasedGeometry, !erased.isEmpty {
+            for sub in erased.subpaths where sub.count >= 3 {
+                let path = CGMutablePath()
+                path.addLines(between: sub)
+                path.closeSubpath()
+                if path.contains(q) { return false }
+            }
         }
 
         let halfStroke = style.strokeWidthPx / 2
